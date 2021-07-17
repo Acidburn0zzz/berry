@@ -11,7 +11,9 @@ const NUMBER_REGEXP = /^[0-9]+$/;
 // $3: hash
 // $4: depth
 // $5: subpath
-const VIRTUAL_REGEXP = /^(\/(?:[^\/]+\/)*?\$\$virtual)((?:\/([^\/]+)(?:\/([^\/]+))?)?((?:\/.*)?))$/;
+const VIRTUAL_REGEXP = /^(\/(?:[^/]+\/)*?(?:\$\$virtual|__virtual__))((?:\/((?:[^/]+-)?[a-f0-9]+)(?:\/([^/]+))?)?((?:\/.*)?))$/;
+
+const VALID_COMPONENT = /^([^/]+-)?[a-f0-9]+$/;
 
 export type VirtualFSOptions = {
   baseFs?: FakeFS<PortablePath>,
@@ -22,8 +24,11 @@ export class VirtualFS extends ProxiedFS<PortablePath, PortablePath> {
   protected readonly baseFs: FakeFS<PortablePath>;
 
   static makeVirtualPath(base: PortablePath, component: Filename, to: PortablePath) {
-    if (ppath.basename(base) !== `$$virtual`)
-      throw new Error(`Assertion failed: Virtual folders must be named "$$virtual"`);
+    if (ppath.basename(base) !== `__virtual__`)
+      throw new Error(`Assertion failed: Virtual folders must be named "__virtual__"`);
+
+    if (!ppath.basename(component).match(VALID_COMPONENT))
+      throw new Error(`Assertion failed: Virtual components must be ended by an hexadecimal hash`);
 
     // Obtains the relative distance between the virtual path and its actual target
     const target = ppath.relative(ppath.dirname(base), to);
@@ -42,7 +47,7 @@ export class VirtualFS extends ProxiedFS<PortablePath, PortablePath> {
 
   static resolveVirtual(p: PortablePath): PortablePath {
     const match = p.match(VIRTUAL_REGEXP);
-    if (!match)
+    if (!match || (!match[3] && match[5]))
       return p;
 
     const target = ppath.dirname(match[1] as PortablePath);
@@ -99,7 +104,13 @@ export class VirtualFS extends ProxiedFS<PortablePath, PortablePath> {
   }
 
   mapToBase(p: PortablePath): PortablePath {
-    return VirtualFS.resolveVirtual(p);
+    if (this.pathUtils.isAbsolute(p))
+      return VirtualFS.resolveVirtual(p);
+
+    const resolvedRoot = VirtualFS.resolveVirtual(this.baseFs.resolve(PortablePath.dot));
+    const resolvedP = VirtualFS.resolveVirtual(this.baseFs.resolve(p));
+
+    return ppath.relative(resolvedRoot, resolvedP);
   }
 
   mapFromBase(p: PortablePath) {

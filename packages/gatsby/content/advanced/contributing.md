@@ -2,9 +2,14 @@
 category: advanced
 path: /advanced/contributing
 title: "Contributing"
+description: Yarn's contributing guide.
 ---
 
-Thanks for being here! Yarn gives a lot of importance to being a community project, and we rely on your help as much as you rely on ours. In order to help you help us we've invested in an infra and documentation that should make contributing to Yarn very easy. If you have any feedback on what we could improve, please open an issue to discuss it!
+Thanks for being here! Yarn gives a lot of importance to being a community project, and we rely on your help as much as you rely on ours. In order to help you help us, we've invested in an infra and documentation that should make contributing to Yarn very easy. If you have any feedback on what we could improve, please open an issue to discuss it!
+
+```toc
+# This code block gets replaced with the Table of Contents
+```
 
 ## Opening an issue
 
@@ -12,9 +17,9 @@ We have some rules regarding our issues. Please check [the following page](/adva
 
 ## How can you help?
 
-- Review our documentation! We often aren't native english speakers, and our grammar might be a bit off. Any help we can get that makes our documentation more digest is appreciated!
+- Review our documentation! We often aren't native english speakers, and our grammar might be a bit off. Any help we can get that makes our documentation more digestible is appreciated!
 
-- Talk about Yarn in your local meetups! Even our users aren't always aware of some of our features. Learn, then share your knowledge to your own circles!
+- Talk about Yarn in your local meetups! Even our users aren't always aware of some of our features. Learn, then share your knowledge with your own circles!
 
 - Help with our infra! There are always small improvements to do: run tests faster, uniformize the test names, improve the way our version numbers are setup, ...
 
@@ -40,25 +45,25 @@ yarn install # Will automatically pick up any changes you made to sources
 
 ## Testing your code
 
-We currently have two testsuites, built for different purposes. The first one are unit tests and can be triggered by running the following command from anywhere within the repository:
+We currently have two testsuites, built for different purposes. The first one is unit tests and can be triggered by running the following command from anywhere within the repository:
 
 ```bash
 yarn test:unit
 ```
 
-While various subcomponents that have a strict JS interface contract are tested via unit tests (for example the portable shell library, or the various util libraries we ship), Yarn as a whole relies on integration tests. Being much closer from what our users experience, they give us a higher confidence when refactoring the application that everything will work according to plan. Those tests can be triggered by running the following command (again, from anywhere within the repository):
+While various subcomponents that have a strict JS interface contract are tested via unit tests (for example the portable shell library, or the various util libraries we ship), Yarn as a whole relies on integration tests. Being much closer to what our users experience, they give us a higher confidence when refactoring the application that everything will work according to plan. Those tests can be triggered by running the following command (again, from anywhere within the repository):
 
 ```bash
 yarn build:cli
 yarn test:integration
 ```
 
-Note that because we want to avoid adding the `@babel/register` overhead to each Yarn call the CLI will need to be prebuilt in order for the integration tests to run - that's what the `yarn build:cli` command is for. This unfortunately means that you will need to rebuild the CLI after each modification if you want the integration tests to pick up your changes.
+Note that because we want to avoid adding the `@babel/register` overhead to each Yarn call the CLI will need to be prebuilt for the integration tests to run - that's what the `yarn build:cli` command is for. This unfortunately means that you will need to rebuild the CLI after each modification if you want the integration tests to pick up your changes.
 
 Both unit tests and integration tests use Jest, which means that you can filter the tests you want to run by using the `-t` flag (or simply the file path):
 
 ```bash
-yarn test:unit berry-shell
+yarn test:unit yarnpkg-shell
 yarn test:integration -t 'it should correctly install a single dependency that contains no sub-dependencies'
 ```
 
@@ -83,9 +88,25 @@ We use ESLint to check this, so using the `--fix` flag will cause ESLint to atte
 yarn test:lint --fix
 ```
 
+## Checking Constraints
+
+We use [constraints](/features/constraints) to enforce various rules across the repository. They are declared inside the [`constraints.pro` file](https://github.com/yarnpkg/berry/blob/master/constraints.pro) and their purposes are documented with comments.
+
+Constraints can be checked with `yarn constraints`, and fixed with `yarn constraints --fix`. Generally speaking:
+
+- Workspaces must not depend on conflicting ranges of dependencies. Use the `-i,--interactive` flag and select "Reuse" when installing dependencies and you shouldn't ever have to deal with this rule.
+
+- Workspaces must not depend on non-workspace ranges of available workspaces. Use the `-i,--interactive` flag and select "Reuse" or "Attach" when installing dependencies and you shouldn't ever have to deal with this rule.
+
+- Workspaces that are part of the standard bundle or plugins must have specific build scripts. The ones that aren't, must be declared inside the `constraints.pro` file with `inline_compile`.
+
+- Workspaces must point our repository through the `repository` field.
+
 ## Preparing your PR to be released
 
-In order to track which packages need to be released we use the workflow described in the [following document](https://yarnpkg.com/advanced/managing-releases). To summarize, you must run `yarn version check --interactive` on each PR you make, and select which packages should be released again for your changes to be effective (and to which version), if any.
+In order to track which packages need to be released, we use the workflow described in the [following document](/features/release-workflow). To summarize, you must run `yarn version check --interactive` on each PR you make, and select which packages should be released again for your changes to be effective (and to which version), if any.
+
+You can check if you've set everything correctly with `yarn version check`.
 
 If you expect a package to have to be released again but Yarn doesn't offer you this choice, first check whether the name of your local branch is `master`. If that's the case, Yarn might not be able to detect your changes (since it will do it against `master`, which is yourself). Run the following commands:
 
@@ -99,9 +120,11 @@ yarn version check --interactive
 
 If it fails and you have no idea why, feel free to ping a maintainer and we'll do our best to help you.
 
+**Note:** If you modify one of the [default plugins](https://github.com/yarnpkg/berry#default-plugins), you will also need to bump `@yarnpkg/cli`.
+
 ## Writing documentation
 
-Our website is stored within the [`packages/gatsby`](https://github.com/yarnpkg/berry/tree/master/packages/gatsby) directory. *Do not manually edit the html files in the `docs` folder!* Instead, just make your changes in the Gatsby directory (for example you'd edit this very page [here](https://github.com/yarnpkg/berry/blob/master/packages/gatsby/content/advanced/plugin-tutorial.md)), then run the following command to spawn a local server and see your changes:
+Our website is stored within the [`packages/gatsby`](https://github.com/yarnpkg/berry/tree/master/packages/gatsby) directory. *Do not manually edit the html files in the `docs` folder!* Instead, just make your changes in the Gatsby directory (for example you'd edit this very page [here](https://github.com/yarnpkg/berry/blob/master/packages/gatsby/content/advanced/contributing.md)), then run the following command to spawn a local server and see your changes:
 
 ```bash
 yarn develop

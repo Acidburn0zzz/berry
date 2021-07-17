@@ -1,18 +1,21 @@
+import {ChildProcess}                               from 'child_process';
 import crossSpawn                                   from 'cross-spawn';
 import {PassThrough, Readable, Transform, Writable} from 'stream';
+import {StringDecoder}                              from 'string_decoder';
 
-import {ShellOptions}                               from './index';
+import {ShellOptions, ShellState}                   from './index';
 
-enum Pipe {
+export enum Pipe {
+  STDIN = 0b00,
   STDOUT = 0b01,
   STDERR = 0b10,
-};
+}
 
 // This is hell to type
 export type Stdio = [
   any,
   any,
-  any
+  any,
 ];
 
 export type ProcessImplementation = (
@@ -22,10 +25,17 @@ export type ProcessImplementation = (
   promise: Promise<number>,
 };
 
-function nextTick() {
-  return new Promise(resolve => {
-    process.nextTick(resolve);
-  });
+const activeChildren = new Set<ChildProcess>();
+
+function sigintHandler() {
+  // We don't want SIGINT to kill our process; we want it to kill the
+  // innermost process, whose end will cause our own to exit.
+}
+
+function sigtermHandler() {
+  for (const child of activeChildren) {
+    child.kill();
+  }
 }
 
 export function makeProcess(name: string, args: Array<string>, opts: ShellOptions, spawnOpts: any): ProcessImplementation {
@@ -48,6 +58,13 @@ export function makeProcess(name: string, args: Array<string>, opts: ShellOption
       stderr,
     ]});
 
+    activeChildren.add(child);
+
+    if (activeChildren.size === 1) {
+      process.on(`SIGINT`, sigintHandler);
+      process.on(`SIGTERM`, sigtermHandler);
+    }
+
     if (stdio[0] instanceof Transform)
       stdio[0].pipe(child.stdin!);
     if (stdio[1] instanceof Transform)
@@ -59,13 +76,20 @@ export function makeProcess(name: string, args: Array<string>, opts: ShellOption
       stdin: child.stdin!,
       promise: new Promise(resolve => {
         child.on(`error`, error => {
-          // @ts-ignore
+          activeChildren.delete(child);
+
+          if (activeChildren.size === 0) {
+            process.off(`SIGINT`, sigintHandler);
+            process.off(`SIGTERM`, sigtermHandler);
+          }
+
+          // @ts-expect-error
           switch (error.code) {
             case `ENOENT`: {
               stdio[2].write(`command not found: ${name}\n`);
               resolve(127);
             } break;
-            case `EACCESS`: {
+            case `EACCES`: {
               stdio[2].write(`permission denied: ${name}\n`);
               resolve(128);
             } break;
@@ -77,6 +101,13 @@ export function makeProcess(name: string, args: Array<string>, opts: ShellOption
         });
 
         child.on(`exit`, code => {
+          activeChildren.delete(child);
+
+          if (activeChildren.size === 0) {
+            process.off(`SIGINT`, sigintHandler);
+            process.off(`SIGTERM`, sigtermHandler);
+          }
+
           if (code !== null) {
             resolve(code);
           } else {
@@ -96,7 +127,7 @@ export function makeBuiltin(builtin: (opts: any) => Promise<number>): ProcessImp
 
     return {
       stdin,
-      promise: nextTick().then(() => builtin({
+      promise: Promise.resolve().then(() => builtin({
         stdin,
         stdout: stdio[1],
         stderr: stdio[2],
@@ -261,4 +292,56 @@ export class Handle {
 
 export function start(p: ProcessImplementation, opts: StartOptions) {
   return Handle.start(p, opts);
+}
+
+function createStreamReporter(reportFn: (text: string) => void, prefix: string | null = null) {
+  const stream = new PassThrough();
+  const decoder = new StringDecoder();
+
+  let buffer = ``;
+
+  stream.on(`data`, chunk => {
+    let chunkStr = decoder.write(chunk);
+    let lineIndex;
+
+    do {
+      lineIndex = chunkStr.indexOf(`\n`);
+
+      if (lineIndex !== -1) {
+        const line = buffer + chunkStr.substr(0, lineIndex);
+
+        chunkStr = chunkStr.substr(lineIndex + 1);
+        buffer = ``;
+
+        if (prefix !== null) {
+          reportFn(`${prefix} ${line}`);
+        } else {
+          reportFn(line);
+        }
+      }
+    } while (lineIndex !== -1);
+
+    buffer += chunkStr;
+  });
+
+  stream.on(`end`, () => {
+    const last = decoder.end();
+
+    if (last !== ``) {
+      if (prefix !== null) {
+        reportFn(`${prefix} ${last}`);
+      } else {
+        reportFn(last);
+      }
+    }
+  });
+
+  return stream;
+}
+
+export function createOutputStreamsWithPrefix(state: ShellState, {prefix}: {prefix: string | null}) {
+  return {
+    stdout: createStreamReporter(text => state.stdout.write(`${text}\n`), (state.stdout as any).isTTY ? prefix : null),
+    stderr: createStreamReporter(text => state.stderr.write(`${text}\n`), (state.stderr as any).isTTY ? prefix : null),
+  };
 }

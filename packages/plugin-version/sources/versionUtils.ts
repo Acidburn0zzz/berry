@@ -8,22 +8,24 @@ import semver                                                                   
 const SUPPORTED_UPGRADE_REGEXP = /^(>=|[~^]|)(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$/;
 
 export enum Decision {
-  UNDECIDED = 'undecided',
-  DECLINE = 'decline',
-  MAJOR = 'major',
-  MINOR = 'minor',
-  PATCH = 'patch',
-  PRERELEASE = 'prerelease',
-};
+  UNDECIDED = `undecided`,
+  DECLINE = `decline`,
+  MAJOR = `major`,
+  MINOR = `minor`,
+  PATCH = `patch`,
+  PRERELEASE = `prerelease`,
+}
 
 export type Releases =
   Map<Workspace, Exclude<Decision, Decision.UNDECIDED>>;
 
-export async function fetchBase(root: PortablePath) {
-  const candidateBases = [`master`, `origin/master`, `upstream/master`];
+export async function fetchBase(root: PortablePath, {baseRefs}: {baseRefs: Array<string>}) {
+  if (baseRefs.length === 0)
+    throw new UsageError(`Can't run this command with zero base refs specified.`);
+
   const ancestorBases = [];
 
-  for (const candidate of candidateBases) {
+  for (const candidate of baseRefs) {
     const {code} = await execUtils.execvp(`git`, [`merge-base`, candidate, `HEAD`], {cwd: root});
     if (code === 0) {
       ancestorBases.push(candidate);
@@ -31,7 +33,7 @@ export async function fetchBase(root: PortablePath) {
   }
 
   if (ancestorBases.length === 0)
-    throw new UsageError(`No ancestor could be found between any of HEAD and ${candidateBases.join(`, `)}`);
+    throw new UsageError(`No ancestor could be found between any of HEAD and ${baseRefs.join(`, `)}`);
 
   const {stdout: mergeBaseStdout} = await execUtils.execvp(`git`, [`merge-base`, `HEAD`, ...ancestorBases], {cwd: root, strict: true});
   const hash = mergeBaseStdout.trim();
@@ -61,19 +63,23 @@ export async function fetchRoot(initialCwd: PortablePath) {
   return match;
 }
 
-export async function fetchChangedFiles(root: PortablePath, {base}: {base: string}) {
+// Note: This returns all changed files from the git diff, which can include
+// files not belonging to a workspace
+export async function fetchChangedFiles(root: PortablePath, {base, project}: {base: string, project: Project}) {
+  const ignorePattern = miscUtils.buildIgnorePattern(project.configuration.get(`changesetIgnorePatterns`));
+
   const {stdout: localStdout} = await execUtils.execvp(`git`, [`diff`, `--name-only`, `${base}`], {cwd: root, strict: true});
   const trackedFiles = localStdout.split(/\r\n|\r|\n/).filter(file => file.length > 0).map(file => ppath.resolve(root, npath.toPortablePath(file)));
 
   const {stdout: untrackedStdout} = await execUtils.execvp(`git`, [`ls-files`, `--others`, `--exclude-standard`], {cwd: root, strict: true});
   const untrackedFiles = untrackedStdout.split(/\r\n|\r|\n/).filter(file => file.length > 0).map(file => ppath.resolve(root, npath.toPortablePath(file)));
 
-  return [...new Set([...trackedFiles, ...untrackedFiles].sort())];
-}
+  const changedFiles = [...new Set([...trackedFiles, ...untrackedFiles].sort())];
 
-type Await<T> = T extends {
-  then(onfulfilled?: (value: infer U) => unknown): unknown;
-} ? U : T;
+  return ignorePattern
+    ? changedFiles.filter(p => !ppath.relative(project.cwd, p).match(ignorePattern))
+    : changedFiles;
+}
 
 export type VersionFile = {
   project: Project,
@@ -97,10 +103,10 @@ export type VersionFile = {
   baseTitle: null,
 });
 
-export async function resolveVersionFiles(project: Project) {
-  const candidateReleases = new Map<Workspace, string>();
+export async function resolveVersionFiles(project: Project, {prerelease = null}: {prerelease?: string | null} = {}) {
+  let candidateReleases = new Map<Workspace, string>();
 
-  const deferredVersionFolder = project.configuration.get<PortablePath>(`deferredVersionFolder`);
+  const deferredVersionFolder = project.configuration.get(`deferredVersionFolder`);
   if (!xfs.existsSync(deferredVersionFolder))
     return new Map();
 
@@ -124,11 +130,16 @@ export async function resolveVersionFiles(project: Project) {
       if (workspace.manifest.version === null)
         throw new Error(`Assertion failed: Expected the workspace to have a version (${structUtils.prettyLocator(project.configuration, workspace.anchoredLocator)})`);
 
+      // If there's a `stableVersion` field, then we assume that `version`
+      // contains a prerelease version and that we need to base the version
+      // bump relative to the latest stable instead.
+      const baseVersion = workspace.manifest.raw.stableVersion ?? workspace.manifest.version;
+
       const candidateRelease = candidateReleases.get(workspace);
-      const suggestedRelease = applyStrategy(workspace.manifest.version, decision as any);
+      const suggestedRelease = applyStrategy(baseVersion, decision as any);
 
       if (suggestedRelease === null)
-        throw new Error(`Assertion failed: Expected ${workspace.manifest.version} to support being bumped via strategy ${decision}`);
+        throw new Error(`Assertion failed: Expected ${baseVersion} to support being bumped via strategy ${decision}`);
 
       const bestRelease = typeof candidateRelease !== `undefined`
         ? semver.gt(suggestedRelease, candidateRelease) ? suggestedRelease : candidateRelease
@@ -138,11 +149,17 @@ export async function resolveVersionFiles(project: Project) {
     }
   }
 
+  if (prerelease) {
+    candidateReleases = new Map([...candidateReleases].map(([workspace, release]) => {
+      return [workspace, applyPrerelease(release, {current: workspace.manifest.version!, prerelease})];
+    }));
+  }
+
   return candidateReleases;
 }
 
 export async function clearVersionFiles(project: Project) {
-  const deferredVersionFolder = project.configuration.get<PortablePath>(`deferredVersionFolder`);
+  const deferredVersionFolder = project.configuration.get(`deferredVersionFolder`);
   if (!xfs.existsSync(deferredVersionFolder))
     return;
 
@@ -150,7 +167,7 @@ export async function clearVersionFiles(project: Project) {
 }
 
 export async function updateVersionFiles(project: Project) {
-  const deferredVersionFolder = project.configuration.get<PortablePath>(`deferredVersionFolder`);
+  const deferredVersionFolder = project.configuration.get(`deferredVersionFolder`);
   if (!xfs.existsSync(deferredVersionFolder))
     return;
 
@@ -164,10 +181,11 @@ export async function updateVersionFiles(project: Project) {
     const versionContent = await xfs.readFilePromise(versionPath, `utf8`);
     const versionData = parseSyml(versionContent);
 
-    if (typeof versionData.releases === `undefined`)
+    const releases = versionData?.releases;
+    if (!releases)
       continue;
 
-    for (const locatorStr of Object.keys(versionData.releases || {})) {
+    for (const locatorStr of Object.keys(releases)) {
       const locator = structUtils.parseLocator(locatorStr);
       const workspace = project.tryWorkspaceByLocator(locator);
 
@@ -194,20 +212,27 @@ export async function openVersionFile(project: Project, {allowEmpty = false}: {a
   const root = await fetchRoot(configuration.projectCwd);
 
   const base = root !== null
-    ? await fetchBase(root)
+    ? await fetchBase(root, {baseRefs: configuration.get(`changesetBaseRefs`)})
     : null;
 
   const changedFiles = root !== null
-    ? await fetchChangedFiles(root, {base: base!.hash})
+    ? await fetchChangedFiles(root, {base: base!.hash, project})
     : [];
 
-  const deferredVersionFolder = configuration.get<PortablePath>(`deferredVersionFolder`);
+  const deferredVersionFolder = configuration.get(`deferredVersionFolder`);
   const versionFiles = changedFiles.filter(p => ppath.contains(deferredVersionFolder, p) !== null);
 
   if (versionFiles.length > 1)
-    throw new UsageError(`Your current branch contains multiple versioning files; this isn't supported:\n- ${versionFiles.join(`\n- `)}`);
+    throw new UsageError(`Your current branch contains multiple versioning files; this isn't supported:\n- ${versionFiles.map(file => npath.fromPortablePath(file)).join(`\n- `)}`);
 
-  const changedWorkspaces = new Set(changedFiles.map(file => project.getWorkspaceByFilePath(file)));
+  const changedWorkspaces: Set<Workspace> = new Set(miscUtils.mapAndFilter(changedFiles, file => {
+    const workspace = project.tryWorkspaceByFilePath(file);
+    if (workspace === null)
+      return miscUtils.mapAndFilter.skip;
+
+    return workspace;
+  }));
+
   if (versionFiles.length === 0 && changedWorkspaces.size === 0 && !allowEmpty)
     return null;
 
@@ -277,7 +302,7 @@ export async function openVersionFile(project: Project, {allowEmpty = false}: {a
         }
       }
 
-      await xfs.mkdirpPromise(ppath.dirname(versionPath));
+      await xfs.mkdirPromise(ppath.dirname(versionPath), {recursive: true});
 
       await xfs.changeFilePromise(versionPath, stringifySyml(
         new stringifySyml.PreserveOrdering({
@@ -441,6 +466,11 @@ export function applyReleases(project: Project, newVersions: Map<Workspace, stri
     const oldVersion = workspace.manifest.version;
     workspace.manifest.version = newVersion;
 
+    if (semver.prerelease(newVersion) === null)
+      delete workspace.manifest.raw.stableVersion;
+    else if (!workspace.manifest.raw.stableVersion)
+      workspace.manifest.raw.stableVersion = oldVersion;
+
     const identString = workspace.manifest.name !== null
       ? structUtils.stringifyIdent(workspace.manifest.name)
       : null;
@@ -473,7 +503,7 @@ export function applyReleases(project: Project, newVersions: Map<Workspace, stri
       // We can only auto-upgrade the basic semver ranges (we can't auto-upgrade ">=1.0.0 <2.0.0", for example)
       const parsed = range.match(SUPPORTED_UPGRADE_REGEXP);
       if (!parsed) {
-        report.reportWarning(MessageName.UNNAMED, `Couldn't auto-upgrade range ${range} (in ${structUtils.prettyLocator(project.configuration, workspace.anchoredLocator)})`);
+        report.reportWarning(MessageName.UNNAMED, `Couldn't auto-upgrade range ${range} (in ${structUtils.prettyLocator(project.configuration, dependent.anchoredLocator)})`);
         continue;
       }
 
@@ -485,4 +515,70 @@ export function applyReleases(project: Project, newVersions: Map<Workspace, stri
       dependent.manifest[set].set(identHash, newDescriptor);
     }
   }
+}
+
+const placeholders: Map<string, {
+  extract: (parts: Array<string | number>) => [string | number, Array<string | number>] | null,
+  generate: (previous?: number) => string,
+}> = new Map([
+  [`%n`, {
+    extract: parts => {
+      if (parts.length >= 1) {
+        return [parts[0], parts.slice(1)];
+      } else {
+        return null;
+      }
+    },
+    generate: (previous = 0) => {
+      return `${previous + 1}`;
+    },
+  }],
+]);
+
+export function applyPrerelease(version: string, {current, prerelease}: {current: string, prerelease: string}) {
+  const currentVersion = new semver.SemVer(current);
+
+  let currentPreParts = currentVersion.prerelease.slice();
+  const nextPreParts = [];
+
+  currentVersion.prerelease = [];
+
+  // If the version we have in mind has nothing in common with the one we want,
+  // we don't want to reuse its prerelease identifiers (1.0.0-rc.5 -> 1.1.0->rc.1)
+  if (currentVersion.format() !== version)
+    currentPreParts.length = 0;
+
+  let patternMatched = true;
+
+  const patternParts = prerelease.split(/\./g);
+  for (const part of patternParts) {
+    const placeholder = placeholders.get(part);
+
+    if (typeof placeholder === `undefined`) {
+      nextPreParts.push(part);
+
+      if (currentPreParts[0] === part) {
+        currentPreParts.shift();
+      } else {
+        patternMatched = false;
+      }
+    } else {
+      const res = patternMatched
+        ? placeholder.extract(currentPreParts)
+        : null;
+
+      if (res !== null && typeof res[0] === `number`) {
+        nextPreParts.push(placeholder.generate(res[0]));
+        currentPreParts = res[1];
+      } else {
+        nextPreParts.push(placeholder.generate());
+        patternMatched = false;
+      }
+    }
+  }
+
+  if (currentVersion.prerelease)
+    currentVersion.prerelease = [];
+
+  return `${version}-${nextPreParts.join(`.`)}`;
 }

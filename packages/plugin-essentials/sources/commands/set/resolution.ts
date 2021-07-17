@@ -1,18 +1,13 @@
 import {BaseCommand, WorkspaceRequiredError}         from '@yarnpkg/cli';
 import {Configuration, Cache, Project, StreamReport} from '@yarnpkg/core';
 import {structUtils}                                 from '@yarnpkg/core';
-import {Command, Usage}                              from 'clipanion';
+import {Command, Option, Usage}                      from 'clipanion';
 
 // eslint-disable-next-line arca/no-default-export
 export default class SetResolutionCommand extends BaseCommand {
-  @Command.String()
-  descriptor!: string;
-
-  @Command.String()
-  resolution!: string;
-
-  @Command.Boolean(`-s,--save`)
-  save: boolean = false;
+  static paths = [
+    [`set`, `resolution`],
+  ];
 
   static usage: Usage = Command.Usage({
     description: `enforce a package resolution`,
@@ -24,16 +19,26 @@ export default class SetResolutionCommand extends BaseCommand {
       Note that no attempt is made at validating that \`resolution\` is a valid resolution entry for \`descriptor\`.
     `,
     examples: [[
-      `Force all instances of lodash@^1.2.3 to resolve to 1.5.0`,
-      `$0 set resolution lodash@^1.2.3 1.5.0`,
+      `Force all instances of lodash@npm:^1.2.3 to resolve to 1.5.0`,
+      `$0 set resolution lodash@npm:^1.2.3 1.5.0`,
     ]],
   });
 
-  @Command.Path(`set`, `resolution`)
+  save = Option.Boolean(`-s,--save`, false, {
+    description: `Persist the resolution inside the top-level manifest`,
+  });
+
+  descriptor = Option.String();
+  resolution = Option.String();
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project, workspace} = await Project.find(configuration, this.context.cwd);
     const cache = await Cache.find(configuration);
+
+    await project.restoreInstallState({
+      restoreResolutions: false,
+    });
 
     if (!workspace)
       throw new WorkspaceRequiredError(project.cwd, this.context.cwd);

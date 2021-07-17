@@ -19,17 +19,37 @@ Object {
 }
 `;
 
+exports[`Commands workspace foreach should include dependencies if using --recursive 1`] = `
+Object {
+  "code": 0,
+  "stderr": "",
+  "stdout": "➤ YN0000: Test Workspace A
+➤ YN0000: Test Workspace C
+➤ YN0000: Test Workspace B
+➤ YN0000: Done
+",
+}
+`;
+
 exports[`Commands workspace foreach should never run the scripts on workspaces that match the --exclude list 1`] = `
 Object {
   "code": 0,
   "stderr": "",
-  "stdout": "➤ YN0000: [workspace-c]: Test Workspace C
+  "stdout": "➤ YN0000: [workspace-c]: Process started
+➤ YN0000: [workspace-c]: Test Workspace C
+➤ YN0000: [workspace-c]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-d]: Process started
 ➤ YN0000: [workspace-d]: Test Workspace D
+➤ YN0000: [workspace-d]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-e]: Process started
 ➤ YN0000: [workspace-e]: Test Workspace E
+➤ YN0000: [workspace-e]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-f]: Process started
 ➤ YN0000: [workspace-f]: Test Workspace F
+➤ YN0000: [workspace-f]: Process exited (exit code 0)
 ➤ YN0000: Done
 ",
 }
@@ -54,9 +74,13 @@ exports[`Commands workspace foreach should only run the scripts on workspaces th
 Object {
   "code": 0,
   "stderr": "",
-  "stdout": "➤ YN0000: [workspace-a]: Test Workspace A
+  "stdout": "➤ YN0000: [workspace-a]: Process started
+➤ YN0000: [workspace-a]: Test Workspace A
+➤ YN0000: [workspace-a]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-b]: Process started
 ➤ YN0000: [workspace-b]: Test Workspace B
+➤ YN0000: [workspace-b]: Process exited (exit code 0)
 ➤ YN0000: Done
 ",
 }
@@ -66,23 +90,51 @@ exports[`Commands workspace foreach should prefix the output with run with --ver
 Object {
   "code": 0,
   "stderr": "",
-  "stdout": "➤ YN0000: [workspace-a]: Test Workspace A
+  "stdout": "➤ YN0000: [workspace-a]: Process started
+➤ YN0000: [workspace-a]: Test Workspace A
+➤ YN0000: [workspace-a]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-b]: Process started
 ➤ YN0000: [workspace-b]: Test Workspace B
+➤ YN0000: [workspace-b]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-c]: Process started
 ➤ YN0000: [workspace-c]: Test Workspace C
+➤ YN0000: [workspace-c]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-d]: Process started
 ➤ YN0000: [workspace-d]: Test Workspace D
+➤ YN0000: [workspace-d]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-e]: Process started
 ➤ YN0000: [workspace-e]: Test Workspace E
+➤ YN0000: [workspace-e]: Process exited (exit code 0)
 
+➤ YN0000: [workspace-f]: Process started
 ➤ YN0000: [workspace-f]: Test Workspace F
+➤ YN0000: [workspace-f]: Process exited (exit code 0)
 ➤ YN0000: Done
 ",
 }
 `;
 
-exports[`Commands workspace foreach should run on child workspaces by default 1`] = `
+exports[`Commands workspace foreach should run execute global scripts even on workspaces that don't declare them 1`] = `
+Object {
+  "code": 0,
+  "stderr": "",
+  "stdout": "➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: One execution
+➤ YN0000: Done
+",
+}
+`;
+
+exports[`Commands workspace foreach should run on current and descendant workspaces by default 1`] = `
 Object {
   "code": 0,
   "stderr": "",
@@ -105,6 +157,22 @@ Object {
 ➤ YN0000: Test Workspace D
 ➤ YN0000: Test Workspace E
 ➤ YN0000: Test Workspace F
+➤ YN0000: Done
+",
+}
+`;
+
+exports[`Commands workspace foreach should run set INIT_CWD to each individual workspace cwd even with global scripts 1`] = `
+Object {
+  "code": 0,
+  "stderr": "",
+  "stdout": "➤ YN0000: 
+➤ YN0000: packages/workspace-a
+➤ YN0000: packages/workspace-b
+➤ YN0000: packages/workspace-c
+➤ YN0000: packages/workspace-c/packages/workspace-d
+➤ YN0000: packages/workspace-c/packages/workspace-d/packages/workspace-e
+➤ YN0000: packages/workspace-c/packages/workspace-f
 ➤ YN0000: Done
 ",
 }

@@ -1,12 +1,12 @@
-import {FakeFS, PosixFS, npath, ppath, patchFs, PortablePath, Filename, NativePath} from '@yarnpkg/fslib';
-import fs                                                                           from 'fs';
-import {Module}                                                                     from 'module';
-import {URL, fileURLToPath}                                                         from 'url';
+import {FakeFS, PosixFS, npath, patchFs, PortablePath, NativePath} from '@yarnpkg/fslib';
+import fs                                                          from 'fs';
+import {Module}                                                    from 'module';
+import {URL, fileURLToPath}                                        from 'url';
 
-import {PnpApi}                                                                     from '../types';
+import {PnpApi}                                                    from '../types';
 
-import {ErrorCode, makeError, getIssuerModule}                                      from './internalTools';
-import {Manager}                                                                    from './makeManager';
+import {ErrorCode, makeError, getIssuerModule}                     from './internalTools';
+import {Manager}                                                   from './makeManager';
 
 export type ApplyPatchOptions = {
   fakeFs: FakeFS<PortablePath>,
@@ -14,11 +14,12 @@ export type ApplyPatchOptions = {
 };
 
 export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
-  // @ts-ignore
-  const builtinModules = new Set(Module.builtinModules || Object.keys(process.binding('natives')));
+  // @ts-expect-error
+  const builtinModules = new Set(Module.builtinModules || Object.keys(process.binding(`natives`)));
+  const isBuiltinModule = (request: string) => builtinModules.has(request) || request.startsWith(`node:`);
 
   /**
-   * The cache that will be used for all accesses occuring outside of a PnP context.
+   * The cache that will be used for all accesses occurring outside of a PnP context.
    */
 
   const defaultCache: NodeJS.NodeRequireCache = {};
@@ -30,13 +31,11 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
 
   let enableNativeHooks = true;
 
-  // @ts-ignore
+  // @ts-expect-error
   process.versions.pnp = String(pnpapi.VERSIONS.std);
 
-  // @ts-ignore
   const moduleExports = require(`module`);
 
-  // @ts-ignore
   moduleExports.findPnpApi = (lookupSource: URL | NativePath) => {
     const lookupPath = lookupSource instanceof URL
       ? fileURLToPath(lookupSource)
@@ -47,7 +46,8 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
       return null;
 
     const apiEntry = opts.manager.getApiEntry(apiPath, true);
-    return apiEntry.instance;
+    // Check if the path is ignored
+    return apiEntry.instance.findPackageLocator(lookupPath) ? apiEntry.instance : null;
   };
 
   function getRequireStack(parent: Module | null | undefined) {
@@ -73,7 +73,7 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
 
     // Builtins are managed by the regular Node loader
 
-    if (builtinModules.has(request)) {
+    if (isBuiltinModule(request)) {
       try {
         enableNativeHooks = false;
         return originalModuleLoad.call(Module, request, parent, isMain);
@@ -130,8 +130,9 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
 
     // Create a new module and store it into the cache
 
-    // @ts-ignore
+    // @ts-expect-error
     const module = new Module(modulePath, parent);
+    // @ts-expect-error
     module.pnpApiPath = moduleApiPath;
 
     entry.cache[modulePath] = module;
@@ -139,9 +140,8 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
     // The main module is exposed as global variable
 
     if (isMain) {
-      // @ts-ignore
       process.mainModule = module;
-      module.id = '.';
+      module.id = `.`;
     }
 
     // Try to load the module, and remove it from the cache if it fails
@@ -149,6 +149,7 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
     let hasThrown = true;
 
     try {
+    // @ts-expect-error
       module.load(modulePath);
       hasThrown = false;
     } finally {
@@ -160,10 +161,63 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
     return module.exports;
   };
 
+  type IssuerSpec = {
+    apiPath: PortablePath | null;
+    path: NativePath | null;
+    module: NodeModule | null | undefined;
+  };
+
+  function getIssuerSpecsFromPaths(paths: Array<NativePath>): Array<IssuerSpec> {
+    return paths.map(path => ({
+      apiPath: opts.manager.findApiPathFor(path),
+      path,
+      module: null,
+    }));
+  }
+
+  function getIssuerSpecsFromModule(module: NodeModule | null | undefined): Array<IssuerSpec> {
+    if (module && module.id !== `<repl>` && module.id !== `internal/preload` && !module.parent && !module.filename && module.paths.length > 0) {
+      return [{
+        apiPath: opts.manager.findApiPathFor(module.paths[0]),
+        path: module.paths[0],
+        module,
+      }];
+    }
+
+    const issuer = getIssuerModule(module);
+
+    if (issuer !== null) {
+      const path = npath.dirname(issuer.filename);
+      const apiPath = opts.manager.getApiPathFromParent(issuer);
+
+      return [{apiPath, path, module}];
+    } else {
+      const path = process.cwd();
+
+      const apiPath =
+        opts.manager.findApiPathFor(npath.join(path, `[file]`)) ??
+        opts.manager.getApiPathFromParent(null);
+
+      return [{apiPath, path, module}];
+    }
+  }
+
+  function makeFakeParent(path: string) {
+    const fakeParent = new Module(``);
+
+    const fakeFilePath = npath.join(path, `[file]`);
+    fakeParent.paths = Module._nodeModulePaths(fakeFilePath);
+
+    return fakeParent;
+  }
+
+  // Splits a require request into its components, or return null if the request is a file path
+  const pathRegExp = /^(?![a-zA-Z]:[\\/]|\\\\|\.{0,2}(?:\/|$))((?:@[^/]+\/)?[^/]+)\/*(.*|)$/;
+
   const originalModuleResolveFilename = Module._resolveFilename;
 
-  Module._resolveFilename = function(request: string, parent: NodeModule | null | undefined, isMain: boolean, options?: {[key: string]: any}) {
-    if (builtinModules.has(request))
+  Module._resolveFilename = function(request: string, parent: (NodeModule & {pnpApiPath?: PortablePath}) | null | undefined, isMain: boolean, options?: {[key: string]: any}) {
+    if (isBuiltinModule(request))
       return request;
 
     if (!enableNativeHooks)
@@ -197,45 +251,40 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
       if (optionNames.size > 0) {
         throw makeError(
           ErrorCode.UNSUPPORTED,
-          `Some options passed to require() aren't supported by PnP yet (${Array.from(optionNames).join(', ')})`
+          `Some options passed to require() aren't supported by PnP yet (${Array.from(optionNames).join(`, `)})`
         );
       }
     }
 
-    const getIssuerSpecsFromPaths = (paths: Array<NativePath>) => {
-      return paths.map(path => ({
-        apiPath: opts.manager.findApiPathFor(path),
-        path: npath.toPortablePath(path),
-        module: null,
-      }));
-    };
-
-    const getIssuerSpecsFromModule = (module: NodeModule | null | undefined) => {
-      const issuer = getIssuerModule(module);
-
-      const issuerPath = issuer !== null
-        ? npath.dirname(issuer.filename)
-        : process.cwd();
-
-      return [{
-        apiPath: opts.manager.getApiPathFromParent(issuer),
-        path: npath.toPortablePath(issuerPath),
-        module,
-      }];
-    };
-
-    const makeFakeParent = (path: PortablePath) => {
-      const fakeParent = new Module(``);
-
-      const fakeFilePath = ppath.join(path, `[file]` as Filename);
-      fakeParent.paths = Module._nodeModulePaths(npath.fromPortablePath(fakeFilePath));
-
-      return fakeParent;
-    };
-
     const issuerSpecs = options && options.paths
       ? getIssuerSpecsFromPaths(options.paths)
       : getIssuerSpecsFromModule(parent);
+
+    if (request.match(pathRegExp) === null) {
+      const parentDirectory = parent?.filename != null
+        ? npath.dirname(parent.filename)
+        : null;
+
+      const absoluteRequest = npath.isAbsolute(request)
+        ? request
+        : parentDirectory !== null
+          ? npath.resolve(parentDirectory, request)
+          : null;
+
+      if (absoluteRequest !== null) {
+        const apiPath = parentDirectory === npath.dirname(absoluteRequest) && parent?.pnpApiPath
+          ? parent.pnpApiPath
+          : opts.manager.findApiPathFor(absoluteRequest);
+
+        if (apiPath !== null) {
+          issuerSpecs.unshift({
+            apiPath,
+            path: parentDirectory,
+            module: null,
+          });
+        }
+      }
+    }
 
     let firstError;
 
@@ -248,8 +297,11 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
 
       try {
         if (issuerApi !== null) {
-          resolution = issuerApi.resolveRequest(request, `${path}/`);
+          resolution = issuerApi.resolveRequest(request, path !== null ? `${path}/` : null);
         } else {
+          if (path === null)
+            throw new Error(`Assertion failed: Expected the path to be set`);
+
           resolution = originalModuleResolveFilename.call(Module, request, module || makeFakeParent(path), isMain);
         }
       } catch (error) {
@@ -263,10 +315,19 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
     }
 
     const requireStack = getRequireStack(parent);
-    firstError.requireStack = requireStack;
+
+    Object.defineProperty(firstError, `requireStack`, {
+      configurable: true,
+      writable: true,
+      enumerable: false,
+      value: requireStack,
+    });
 
     if (requireStack.length > 0)
       firstError.message += `\nRequire stack:\n- ${requireStack.join(`\n- `)}`;
+
+    if (typeof firstError.pnpCode === `string`)
+      Error.captureStackTrace(firstError);
 
     throw firstError;
   };
@@ -277,7 +338,12 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
     if (request === `pnpapi`)
       return false;
 
-    if (!enableNativeHooks)
+    // Node sometimes call this function with an absolute path and a `null` set
+    // of paths. This would cause the resolution to fail. To avoid that, we
+    // fallback on the regular resolution. We only do this when `isMain` is
+    // true because the Node default resolution doesn't handle well in-zip
+    // paths, even absolute, so we try to use it as little as possible.
+    if (!enableNativeHooks || (isMain && npath.isAbsolute(request)))
       return originalFindPath.call(Module, request, paths, isMain);
 
     for (const path of paths || []) {
@@ -304,4 +370,4 @@ export function applyPatch(pnpapi: PnpApi, opts: ApplyPatchOptions) {
   };
 
   patchFs(fs, new PosixFS(opts.fakeFs));
-};
+}

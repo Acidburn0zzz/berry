@@ -18,10 +18,10 @@ jobs:
     steps:
     - uses: actions/checkout@master
 
-    - name: 'Use Node.js 10.x'
+    - name: 'Install Node'
       uses: actions/setup-node@master
       with:
-        node-version: 10.x
+        node-version: 14.x
 
     - name: 'Build the standard bundle'
       run: |
@@ -34,12 +34,11 @@ jobs:
         git init
         echo '/.yarn' > .gitignore
 
-        yarn init -p
-        yarn add -D husky@^4.0.0-beta.1 @commitlint/{cli,config-conventional}
-
+        echo '{"skipCI": false, "hooks": {"commit-msg": "commitlint -E HUSKY_GIT_PARAMS"}}' > .huskyrc
         echo 'module.exports = {extends: ["@commitlint/config-conventional"]};' > commitlint.config.js
 
-        echo '{"hooks": {"commit-msg": "commitlint -E HUSKY_GIT_PARAMS"}}' > .huskyrc
+        yarn init -p
+        yarn add -D husky@^4.0.0-beta.1 @commitlint/{cli,config-conventional}
 
         git add .
         ! git commit -m "Invalid commit message should fail pre-commit check"

@@ -1,23 +1,26 @@
 {
   "name": "@yarnpkg/plugin-git",
-  "version": "2.0.0-rc.16",
+  "version": "2.4.0-rc.9",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "dependencies": {
     "@types/semver": "^7.1.0",
-    "@yarnpkg/fslib": "workspace:^2.0.0-rc.16",
+    "@yarnpkg/fslib": "workspace:^2.5.0-rc.9",
     "git-url-parse": "11.1.2",
     "semver": "^7.1.2",
-    "tmp": "^0.1.0"
+    "tslib": "^1.13.0"
   },
   "peerDependencies": {
-    "@yarnpkg/core": "^2.0.0-rc.23"
+    "@yarnpkg/core": "^3.0.0-rc.9"
   },
   "devDependencies": {
-    "@yarnpkg/core": "workspace:^2.0.0-rc.23"
+    "@types/git-url-parse": "^9.0.0",
+    "@yarnpkg/core": "workspace:*"
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-git"
   },
   "scripts": {
     "postpack": "rm -rf lib",
@@ -29,5 +32,9 @@
   },
   "files": [
     "/lib/**/*"
-  ]
+  ],
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.3.0"
 }

@@ -1,13 +1,14 @@
-import {FakeFS, Filename, NativePath, PortablePath, npath, ppath, xfs} from '@yarnpkg/fslib';
-import fs                                                              from 'fs';
-import {Module}                                                        from 'module';
+import {FakeFS, Filename, NativePath, PortablePath, VirtualFS, npath, ppath, xfs} from '@yarnpkg/fslib';
+import fs                                                                         from 'fs';
+import {Module}                                                                   from 'module';
 
-import {PnpApi}                                                        from '../types';
+import {PnpApi}                                                                   from '../types';
 
 export type ApiMetadata = {
   cache: typeof Module._cache,
   instance: PnpApi,
   stats: fs.Stats,
+  lastRefreshCheck: number
 };
 
 export type MakeManagerOptions = {
@@ -25,26 +26,35 @@ export function makeManager(pnpapi: PnpApi, opts: MakeManagerOptions) {
       cache: Module._cache,
       instance: pnpapi,
       stats: initialApiStats,
+      lastRefreshCheck: Date.now(),
     }],
   ]);
 
   function loadApiInstance(pnpApiPath: PortablePath): PnpApi {
     const nativePath = npath.fromPortablePath(pnpApiPath);
 
-    // @ts-ignore
+    // @ts-expect-error
     const module = new Module(nativePath, null);
+    // @ts-expect-error
     module.load(nativePath);
+
     return module.exports;
   }
 
   function refreshApiEntry(pnpApiPath: PortablePath, apiEntry: ApiMetadata) {
+    const timeNow = Date.now();
+    if (timeNow - apiEntry.lastRefreshCheck < 500)
+      return;
+
+    apiEntry.lastRefreshCheck = timeNow;
+
     const stats = opts.fakeFs.statSync(pnpApiPath);
 
     if (stats.mtime > apiEntry.stats.mtime) {
-      console.warn(`[Warning] The runtime detected new informations in a PnP file; reloading the API instance (${pnpApiPath})`);
+      process.emitWarning(`[Warning] The runtime detected new informations in a PnP file; reloading the API instance (${npath.fromPortablePath(pnpApiPath)})`);
 
-      apiEntry.instance = loadApiInstance(pnpApiPath);
       apiEntry.stats = stats;
+      apiEntry.instance = loadApiInstance(pnpApiPath);
     }
   }
 
@@ -60,27 +70,82 @@ export function makeManager(pnpapi: PnpApi, opts: MakeManagerOptions) {
         cache: {},
         instance: loadApiInstance(pnpApiPath),
         stats: opts.fakeFs.statSync(pnpApiPath),
+        lastRefreshCheck: Date.now(),
       });
     }
 
     return apiEntry;
   }
 
-  function findApiPathFor(modulePath: NativePath) {
+  const findApiPathCache = new Map<PortablePath, PortablePath | null>();
+
+  function addToCacheAndReturn(start: PortablePath, end: PortablePath, target: PortablePath | null) {
+    if (target !== null)
+      target = VirtualFS.resolveVirtual(target);
+
     let curr: PortablePath;
-    let next = npath.toPortablePath(modulePath);
+    let next = start;
+
+    do {
+      curr = next;
+      findApiPathCache.set(curr, target);
+      next = ppath.dirname(curr);
+    } while (curr !== end);
+
+    return target;
+  }
+
+  function findApiPathFor(modulePath: NativePath) {
+    const controlledBy: Array<PortablePath> = [];
+    for (const [apiPath, apiEntry] of apiMetadata) {
+      const locator = apiEntry.instance.findPackageLocator(modulePath);
+
+      if (locator) {
+        if (apiMetadata.size === 1) {
+          return apiPath;
+        } else {
+          controlledBy.push(apiPath);
+        }
+      }
+    }
+
+    if (controlledBy.length !== 0) {
+      if (controlledBy.length === 1)
+        return controlledBy[0];
+
+      throw new Error(
+        `Unable to locate pnpapi, the module '${modulePath}' is controlled by multiple pnpapi instances.\nThis is usually caused by using the global cache (enableGlobalCache: true)\n\nControlled by:\n${controlledBy
+          .map(pnpPath => `  ${npath.fromPortablePath(pnpPath)}`)
+          .join(`\n`)}`
+      );
+    }
+
+    const start = ppath.resolve(npath.toPortablePath(modulePath));
+
+    let curr: PortablePath;
+    let next = start;
 
     do {
       curr = next;
 
-      const candidate = ppath.join(curr, `.pnp.js` as Filename);
-      if (xfs.existsSync(candidate) && xfs.statSync(candidate).isFile())
-        return candidate;
+      const cached = findApiPathCache.get(curr);
+      if (cached !== undefined)
+        return addToCacheAndReturn(start, curr, cached);
+
+      const cjsCandidate = ppath.join(curr, Filename.pnpCjs);
+      if (xfs.existsSync(cjsCandidate) && xfs.statSync(cjsCandidate).isFile())
+        return addToCacheAndReturn(start, curr, cjsCandidate);
+
+      // We still support .pnp.js files to improve multi-project compatibility.
+      // TODO: Remove support for .pnp.js files after they stop being used.
+      const legacyCjsCandidate = ppath.join(curr, Filename.pnpJs);
+      if (xfs.existsSync(legacyCjsCandidate) && xfs.statSync(legacyCjsCandidate).isFile())
+        return addToCacheAndReturn(start, curr, legacyCjsCandidate);
 
       next = ppath.dirname(curr);
     } while (curr !== PortablePath.root);
 
-    return null;
+    return addToCacheAndReturn(start, curr, null);
   }
 
   function getApiPathFromParent(parent: Module | null | undefined): PortablePath | null {
@@ -89,7 +154,7 @@ export function makeManager(pnpapi: PnpApi, opts: MakeManagerOptions) {
 
     if (typeof parent.pnpApiPath === `undefined`) {
       if (parent.filename !== null) {
-        return findApiPathFor(parent.filename);
+        return parent.pnpApiPath = findApiPathFor(parent.filename);
       } else {
         return initialApiPath;
       }

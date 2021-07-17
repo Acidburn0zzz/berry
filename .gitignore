@@ -1,3 +1,12 @@
+# https://yarnpkg.com/getting-started/qa/#which-files-should-be-gitignored
+.yarn/*
+!.yarn/cache
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
 node_modules
 yarn-error.log
 
@@ -12,8 +21,8 @@ package.tgz
 /artifacts
 /dist
 
-# This is the Yarn build state; it's local to each clone
-/.yarn/build-state.yml
+# Our documentation is now handled by Netlify
+/docs
 
 # Those files are meant to be local-only
 /packages/*/bundles
@@ -26,3 +35,7 @@ package.tgz
 
 # We check-in the PnP hook because it would be heavy to regenerate it before each bundle build
 !/packages/yarnpkg-pnp/lib/hook.js
+
+/vscode-case-study
+
+.idea

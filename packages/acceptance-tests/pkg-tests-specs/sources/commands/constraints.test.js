@@ -1,14 +1,21 @@
 const {
   fs: {writeFile},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
-const {environments} = require('./constraints/environments');
+const {environments} = require(`./constraints/environments`);
 
 const constraints = {
   [`empty constraints`]: ``,
   [`gen_enforced_dependency (missing)`]: `gen_enforced_dependency(WorkspaceCwd, 'one-fixed-dep', '1.0.0', peerDependencies).`,
   [`gen_enforced_dependency (incompatible)`]: `gen_enforced_dependency(WorkspaceCwd, 'no-deps', '2.0.0', dependencies).`,
   [`gen_enforced_dependency (extraneous)`]: `gen_enforced_dependency(WorkspaceCwd, 'no-deps', null, _).`,
+  [`gen_enforced_dependency (extraneous2)`]:
+    `
+    gen_enforced_dependency(WorkspaceCwd, 'no-deps', null, _) :-
+      WorkspaceCwd \\= '.'.
+    gen_enforced_dependency(WorkspaceCwd, 'no-deps', '1.0.0', DependencyType) :- 
+      workspace_has_dependency(WorkspaceCwd, 'no-deps', '1.0.0', DependencyType).
+    `,
   [`gen_enforced_dependency (ambiguous)`]: `gen_enforced_dependency(WorkspaceCwd, 'no-deps', '1.0.0', dependencies). gen_enforced_dependency(WorkspaceCwd, 'no-deps', '2.0.0', dependencies).`,
   [`gen_enforced_field (missing)`]: `gen_enforced_field(WorkspaceCwd, 'dependencies["a-new-dep"]', '1.0.0').`,
   [`gen_enforced_field (incompatible)`]: `gen_enforced_field(WorkspaceCwd, 'dependencies["no-deps"]', '2.0.0').`,
@@ -34,7 +41,7 @@ describe(`Commands`, () => {
             let stderr;
 
             try {
-              ({code, stdout, stderr} = await run(`constraints`, `check`));
+              ({code, stdout, stderr} = await run(`constraints`));
             } catch (error) {
               ({code, stdout, stderr} = error);
             }

@@ -2,6 +2,7 @@
 category: features
 path: /features/constraints
 title: "Constraints"
+description: An in-depth guide to Yarn's constraints, a feature that provides an easy way to enforce common rules across a project.
 ---
 
 > **Experimental**
@@ -14,9 +15,13 @@ title: "Constraints"
 
 Constraints are a solution to a very basic need: I have a lot of [workspaces](/features/workspaces), and I need to make sure they use the same version of their dependencies. Or that they don't depend on a specific package. Or that they use a specific type of dependency. Anyway, you see the point: whatever is the exact logic, my goal is the same; I want to automatically enforce some kind of rule across all my workspaces. That's exactly what constraints allow you to do.
 
+```toc
+# This code block gets replaced with the Table of Contents
+```
+
 ## Creating a constraint
 
-Constraints are created by adding a `constraints.pro` file at the root of your project (repository). The `.pro` extension might leave you perplex: this is because constraints aren't written in JavaScript (!) but rather in Prolog, a fact-based rule engine. The goal of this section isn't to teach you Prolog (good tutorials already exist, such as [Learn Prolog in Y Minutes](https://learnxinyminutes.com/docs/prolog/)),
+Constraints are created by adding a `constraints.pro` file at the root of your project (repository). The `.pro` extension might leave you perplexed: this is because constraints aren't written in JavaScript (!) but rather in Prolog, a fact-based rule engine. The goal of this section isn't to teach you Prolog (good tutorials already exist, such as [Learn Prolog in Y Minutes](https://learnxinyminutes.com/docs/prolog/)),
 but rather to show you why we chose it and the value it brings.
 
 As we mentioned, Prolog is a fact-based engine. It starts with a list of *facts* that are always true, and a list of *predicates* that basically read as "predicate `f(X)` is true if `u(X)` and `v(X)` are both true". By computing for which values of `X` are `u(X)` and `v(X)` true, Prolog is able to automatically compute the list of values for which `f(X)` would be true. This is particularly useful for constraints, because it allows you to write very simple but powerful rules that have the ability to affect all your workspaces in very few lines.
@@ -138,7 +143,7 @@ gen_enforced_dependency(
 ).
 ```
 
-The `gen_enforced_dependency` rule offers a neat way to inform the package manager that a specific workspace MUST either depend on a specific range of a specific dependency (if `DependencyRange` is non-null) or not depend at all on the dependency (if `DependencyRange` is null) in the `DependencyType` dependencies block.
+The `gen_enforced_dependency` rule offers a neat way to inform the package manager that a specific workspace MUST either depend on a specific range of a specific dependency (if `DependencyRange` is non-null) or not depend at all on the dependency (if `DependencyRange` is null; takes precedence over any conflicting range) in the `DependencyType` dependencies block.
 
 Running `yarn constraints --fix` will instruct Yarn to fix the detected errors the best it can, but in some cases ambiguities will arise. Those will have to be solved manually, although Yarn will help you in the process.
 
@@ -148,7 +153,7 @@ Running `yarn constraints --fix` will instruct Yarn to fix the detected errors t
 gen_enforced_field(
   +WorkspaceCwd,
   -FieldPath,
-  -FieldValue
+  +FieldValue
 ).
 ```
 
@@ -192,13 +197,13 @@ We define a rule that says that for each dependency of each workspace in our pro
 ### Prevent two workspaces from depending on conflicting versions of a same dependency
 
 ```prolog
-gen_invalid_dependency(WorkspaceCwd, DependencyIdent, DependencyType, 'This dependency conflicts with another one from another workspace') :-
+gen_enforced_dependency(WorkspaceCwd, DependencyIdent, DependencyRange2, DependencyType) :-
   workspace_has_dependency(WorkspaceCwd, DependencyIdent, DependencyRange, DependencyType),
-  workspace_has_dependency(_, DependencyIdent, DependencyRange2, _),
+  workspace_has_dependency(OtherWorkspaceCwd, DependencyIdent, DependencyRange2, DependencyType2),
   DependencyRange \= DependencyRange2.
 ```
 
-We define a `gen_invalid_dependency` rule that is true for each dependency of each package (first `workspace_has_dependency`) if it also exists another dependency of another package (second `workspace_has_dependency`) that has the same name but a different range (`\=` operator).
+We define a `gen_enforced_dependency` rule that requires each dependency of each package (first `workspace_has_dependency`) if it also exists another dependency of another package (second `workspace_has_dependency`) that has the same name but a different range (`\=` operator).
 
 ### Force all workspace dependencies to be made explicit
 
@@ -208,4 +213,4 @@ gen_enforced_dependency(WorkspaceCwd, DependencyIdent, 'workspace:*', Dependency
   workspace_has_dependency(WorkspaceCwd, DependencyIdent, _, DependencyType).
 ```
 
-We define a `gen_enforced_dependency` that requires the dependency range `workspace:*` to be used if the dependency name is also the name of a valid workspace. The final `workspace_has_dependency` check is there to ensure that this rule is only applied on workspace that currently depend on the specified workspace in the first place (if it wasn't there, the rule would instead force all workspaces to depend on one another).
+We define a `gen_enforced_dependency` rule that requires the dependency range `workspace:*` to be used if the dependency name is also the name of a valid workspace. The final `workspace_has_dependency` check is there to ensure that this rule is only applied on workspace that currently depend on the specified workspace in the first place (if it wasn't there, the rule would instead force all workspaces to depend on one another).

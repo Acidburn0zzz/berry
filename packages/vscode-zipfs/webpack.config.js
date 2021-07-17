@@ -1,14 +1,13 @@
 const path = require(`path`);
-const PnpWebpackPlugin = require(`pnp-webpack-plugin`);
 
 module.exports = {
-  mode: `development`,
+  mode: process.env.NODE_ENV || `production`,
   devtool: false,
 
-  target: `node`,
+  target: `node10.19`,
 
-  context: `${__dirname}/sources`,
-  entry: `./index.ts`,
+  context: __dirname,
+  entry: `./sources/index.ts`,
 
   output: {
     filename: `index.js`,
@@ -19,8 +18,10 @@ module.exports = {
   module: {
     rules: [{
       test: /\.ts$/,
-      loader: 'ts-loader',
-      options: PnpWebpackPlugin.tsLoaderOptions(),
+      loader: `ts-loader`,
+      options: {
+        compilerOptions: {declaration: false},
+      },
     }],
   },
 
@@ -30,14 +31,5 @@ module.exports = {
 
   resolve: {
     extensions: [`.ts`, `.js`],
-    plugins: [
-      PnpWebpackPlugin,
-    ],
-  },
-
-  resolveLoader: {
-    plugins: [
-      PnpWebpackPlugin.moduleLoader(module),
-    ],
   },
 };

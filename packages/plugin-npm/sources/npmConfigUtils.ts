@@ -1,9 +1,10 @@
-import {Configuration, Manifest} from '@yarnpkg/core';
+import {Configuration, Manifest, Ident} from '@yarnpkg/core';
 
 export enum RegistryType {
-  FETCH_REGISTRY = 'npmRegistryServer',
-  PUBLISH_REGISTRY = 'npmPublishRegistry',
+  FETCH_REGISTRY = `npmRegistryServer`,
+  PUBLISH_REGISTRY = `npmPublishRegistry`,
 }
+
 
 export interface MapLike {
   get(key: string): any;
@@ -44,13 +45,14 @@ export function getDefaultRegistry({configuration, type = RegistryType.FETCH_REG
 }
 
 export function getRegistryConfiguration(registry: string, {configuration}: {configuration: Configuration}): MapLike | null {
-  const registryConfigurations: Map<string, MapLike> = configuration.get(`npmRegistries`);
+  const registryConfigurations = configuration.get(`npmRegistries`);
+  const normalizedRegistry = normalizeRegistry(registry);
 
-  const exactEntry = registryConfigurations.get(registry);
+  const exactEntry = registryConfigurations.get(normalizedRegistry);
   if (typeof exactEntry !== `undefined`)
     return exactEntry;
 
-  const noProtocolEntry = registryConfigurations.get(registry.replace(/^[a-z]+:/, ''));
+  const noProtocolEntry = registryConfigurations.get(normalizedRegistry.replace(/^[a-z]+:/, ``));
   if (typeof noProtocolEntry !== `undefined`)
     return noProtocolEntry;
 
@@ -61,7 +63,7 @@ export function getScopeConfiguration(scope: string | null, {configuration}: {co
   if (scope === null)
     return null;
 
-  const scopeConfigurations: Map<string, MapLike> = configuration.get(`npmScopes`);
+  const scopeConfigurations = configuration.get(`npmScopes`);
 
   const scopeConfiguration = scopeConfigurations.get(scope);
   if (!scopeConfiguration)
@@ -70,3 +72,13 @@ export function getScopeConfiguration(scope: string | null, {configuration}: {co
   return scopeConfiguration;
 }
 
+export function getAuthConfiguration(registry: string, {configuration, ident}: {configuration: Configuration, ident?: Ident}): MapLike {
+  const scopeConfiguration = ident && getScopeConfiguration(ident.scope, {configuration});
+
+  if (scopeConfiguration?.get(`npmAuthIdent`) || scopeConfiguration?.get(`npmAuthToken`))
+    return scopeConfiguration;
+
+  const registryConfiguration = getRegistryConfiguration(registry, {configuration});
+
+  return registryConfiguration || configuration;
+}

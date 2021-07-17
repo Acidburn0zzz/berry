@@ -1,9 +1,10 @@
+import {structUtils}                                from '@yarnpkg/core';
+import {Locator}                                    from '@yarnpkg/core';
 import {Fetcher, FetchOptions, MinimalFetchOptions} from '@yarnpkg/core';
-import {Locator, MessageName}                       from '@yarnpkg/core';
-import {miscUtils, structUtils, tgzUtils}           from '@yarnpkg/core';
-import {NodeFS, PortablePath, ppath}                from '@yarnpkg/fslib';
+import {ppath}                                      from '@yarnpkg/fslib';
 
 import {PROTOCOL}                                   from './constants';
+import * as fileUtils                               from './fileUtils';
 
 export class FileFetcher implements Fetcher {
   supports(locator: Locator, opts: MinimalFetchOptions) {
@@ -28,14 +29,12 @@ export class FileFetcher implements Fetcher {
   async fetch(locator: Locator, opts: FetchOptions) {
     const expectedChecksum = opts.checksums.get(locator.locatorHash) || null;
 
-    const [packageFs, releaseFs, checksum] = await opts.cache.fetchPackageFromCache(
-      locator,
-      expectedChecksum,
-      async () => {
-        opts.report.reportInfoOnce(MessageName.FETCH_NOT_CACHED, `${structUtils.prettyLocator(opts.project.configuration, locator)} can't be found in the cache and will be fetched from the disk`);
-        return await this.fetchFromDisk(locator, opts);
-      },
-    );
+    const [packageFs, releaseFs, checksum] = await opts.cache.fetchPackageFromCache(locator, expectedChecksum, {
+      onHit: () => opts.report.reportCacheHit(locator),
+      onMiss: () => opts.report.reportCacheMiss(locator, `${structUtils.prettyLocator(opts.project.configuration, locator)} can't be found in the cache and will be fetched from the disk`),
+      loader: () => this.fetchFromDisk(locator, opts),
+      skipIntegrityCheck: opts.skipIntegrityCheck,
+    });
 
     return {
       packageFs,
@@ -47,32 +46,6 @@ export class FileFetcher implements Fetcher {
   }
 
   private async fetchFromDisk(locator: Locator, opts: FetchOptions) {
-    const {parentLocator, path} = structUtils.parseFileStyleRange(locator.reference, {protocol: PROTOCOL});
-
-    // If the file target is an absolute path we can directly access it via its
-    // location on the disk. Otherwise we must go through the package fs.
-    const parentFetch = ppath.isAbsolute(path)
-      ? {packageFs: new NodeFS(), prefixPath: PortablePath.root, localPath: PortablePath.root}
-      : await opts.fetcher.fetch(parentLocator, opts);
-
-    // If the package fs publicized its "original location" (for example like
-    // in the case of "file:" packages), we use it to derive the real location.
-    const effectiveParentFetch = parentFetch.localPath
-      ? {packageFs: new NodeFS(), prefixPath: parentFetch.localPath}
-      : parentFetch;
-
-    // Discard the parent fs unless we really need it to access the files
-    if (parentFetch !== effectiveParentFetch && parentFetch.releaseFs)
-      parentFetch.releaseFs();
-
-    const sourceFs = effectiveParentFetch.packageFs;
-    const sourcePath = ppath.resolve(effectiveParentFetch.prefixPath, path);
-
-    return await miscUtils.releaseAfterUseAsync(async () => {
-      return await tgzUtils.makeArchiveFromDirectory(sourcePath, {
-        baseFs: sourceFs,
-        prefixPath: structUtils.getIdentVendorPath(locator),
-      });
-    }, effectiveParentFetch.releaseFs);
+    return fileUtils.makeArchiveFromLocator(locator, {protocol: PROTOCOL, fetchOptions: opts});
   }
 }

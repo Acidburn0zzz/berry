@@ -1,23 +1,55 @@
-import {Libzip}                                                                                    from '@yarnpkg/libzip';
-import {constants}                                                                                 from 'fs';
+import {Libzip}                                                                                                                                      from '@yarnpkg/libzip';
+import {BigIntStats, constants, Stats}                                                                                                               from 'fs';
 
-import {CreateReadStreamOptions, CreateWriteStreamOptions, BasePortableFakeFS, ExtractHintOptions} from './FakeFS';
-import {Dirent}                                                                                    from './FakeFS';
-import {FakeFS, MkdirOptions, WriteFileOptions}                                                    from './FakeFS';
-import {WatchOptions, WatchCallback, Watcher}                                                      from './FakeFS';
-import {NodeFS}                                                                                    from './NodeFS';
-import {ZipFS}                                                                                     from './ZipFS';
-import {Filename, FSPath, PortablePath}                                                            from './path';
+import {WatchOptions, WatchCallback, Watcher}                                                                                                        from './FakeFS';
+import {FakeFS, MkdirOptions, RmdirOptions, WriteFileOptions, OpendirOptions}                                                                        from './FakeFS';
+import {Dirent, SymlinkType}                                                                                                                         from './FakeFS';
+import {CreateReadStreamOptions, CreateWriteStreamOptions, BasePortableFakeFS, ExtractHintOptions, WatchFileOptions, WatchFileCallback, StatWatcher} from './FakeFS';
+import {NodeFS}                                                                                                                                      from './NodeFS';
+import {ZipFS}                                                                                                                                       from './ZipFS';
+import {watchFile, unwatchFile, unwatchAllFiles}                                                                                                     from './algorithms/watchFile';
+import * as errors                                                                                                                                   from './errors';
+import {Filename, FSPath, PortablePath, ppath}                                                                                                       from './path';
 
 const ZIP_FD = 0x80000000;
+
+const DOT_ZIP = `.zip`;
+
+/**
+ * Extracts the archive part (ending in the first `.zip`) from a path.
+ *
+ * The indexOf-based implementation is ~3.7x faster than a RegExp-based implementation.
+ */
+export const getArchivePart = (path: string) => {
+  const idx = path.indexOf(DOT_ZIP);
+  if (idx <= 0)
+    return null;
+
+  // Disallow files named ".zip"
+  if (path[idx - 1] === ppath.sep)
+    return null;
+
+  const nextCharIdx = idx + DOT_ZIP.length;
+
+  // The path either has to end in ".zip" or contain an archive subpath (".zip/...")
+  if (path.length > nextCharIdx && path[nextCharIdx] !== ppath.sep)
+    return null;
+
+  return path.slice(0, nextCharIdx) as PortablePath;
+};
 
 export type ZipOpenFSOptions = {
   baseFs?: FakeFS<PortablePath>,
   filter?: RegExp | null,
-  libzip: Libzip,
+  libzip: Libzip | (() => Libzip),
   maxOpenFiles?: number,
   readOnlyArchives?: boolean,
   useCache?: boolean,
+  /**
+   * Maximum age in ms.
+   * ZipFS instances are pruned from the cache if they aren't accessed within this amount of time.
+   */
+  maxAge?: number,
 };
 
 export class ZipOpenFS extends BasePortableFakeFS {
@@ -31,26 +63,38 @@ export class ZipOpenFS extends BasePortableFakeFS {
     }
   }
 
-  private readonly libzip: Libzip;
+  private libzipFactory!: () => Libzip;
+  private libzipInstance?: Libzip;
+
+  private get libzip(): Libzip {
+    if (typeof this.libzipInstance === `undefined`)
+      this.libzipInstance = this.libzipFactory();
+
+    return this.libzipInstance;
+  }
 
   private readonly baseFs: FakeFS<PortablePath>;
 
-  private readonly zipInstances: Map<string, ZipFS> | null;
+  private readonly zipInstances: Map<string, {zipFs: ZipFS, expiresAt: number, refCount: number}> | null;
 
   private readonly fdMap: Map<number, [ZipFS, number]> = new Map();
   private nextFd = 3;
 
   private readonly filter: RegExp | null;
   private readonly maxOpenFiles: number;
+  private readonly maxAge: number;
   private readonly readOnlyArchives: boolean;
 
-  private isZip: Set<string> = new Set();
-  private notZip: Set<string> = new Set();
+  private isZip: Set<PortablePath> = new Set();
+  private notZip: Set<PortablePath> = new Set();
+  private realPaths: Map<PortablePath, PortablePath> = new Map();
 
-  constructor({libzip, baseFs = new NodeFS(), filter = null, maxOpenFiles = Infinity, readOnlyArchives = false, useCache = true}: ZipOpenFSOptions) {
+  constructor({libzip, baseFs = new NodeFS(), filter = null, maxOpenFiles = Infinity, readOnlyArchives = false, useCache = true, maxAge = 5000}: ZipOpenFSOptions) {
     super();
 
-    this.libzip = libzip;
+    this.libzipFactory = typeof libzip !== `function`
+      ? () => libzip
+      : libzip;
 
     this.baseFs = baseFs;
 
@@ -59,9 +103,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
     this.filter = filter;
     this.maxOpenFiles = maxOpenFiles;
     this.readOnlyArchives = readOnlyArchives;
-
-    this.isZip = new Set();
-    this.notZip = new Set();
+    this.maxAge = maxAge;
   }
 
   getExtractHint(hints: ExtractHintOptions) {
@@ -73,8 +115,10 @@ export class ZipOpenFS extends BasePortableFakeFS {
   }
 
   saveAndClose() {
+    unwatchAllFiles(this);
+
     if (this.zipInstances) {
-      for (const [path, zipFs] of this.zipInstances.entries()) {
+      for (const [path, {zipFs}] of this.zipInstances.entries()) {
         zipFs.saveAndClose();
         this.zipInstances.delete(path);
       }
@@ -82,12 +126,18 @@ export class ZipOpenFS extends BasePortableFakeFS {
   }
 
   discardAndClose() {
+    unwatchAllFiles(this);
+
     if (this.zipInstances) {
-      for (const [path, zipFs] of this.zipInstances.entries()) {
+      for (const [path, {zipFs}] of this.zipInstances.entries()) {
         zipFs.discardAndClose();
         this.zipInstances.delete(path);
       }
     }
+  }
+
+  resolve(p: PortablePath) {
+    return this.baseFs.resolve(p);
   }
 
   private remapFd(zipFs: ZipFS, fd: number) {
@@ -112,13 +162,33 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
   }
 
+  async opendirPromise(p: PortablePath, opts?: OpendirOptions) {
+    return await this.makeCallPromise(p, async () => {
+      return await this.baseFs.opendirPromise(p, opts);
+    }, async (zipFs, {subPath}) => {
+      return await zipFs.opendirPromise(subPath, opts);
+    }, {
+      requireSubpath: false,
+    });
+  }
+
+  opendirSync(p: PortablePath, opts?: OpendirOptions) {
+    return this.makeCallSync(p, () => {
+      return this.baseFs.opendirSync(p, opts);
+    }, (zipFs, {subPath}) => {
+      return zipFs.opendirSync(subPath, opts);
+    }, {
+      requireSubpath: false,
+    });
+  }
+
   async readPromise(fd: number, buffer: Buffer, offset: number, length: number, position: number) {
     if ((fd & ZIP_FD) === 0)
       return await this.baseFs.readPromise(fd, buffer, offset, length, position);
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, read`), {code: `EBADF`});
+      throw errors.EBADF(`read`);
 
     const [zipFs, realFd] = entry;
     return await zipFs.readPromise(realFd, buffer, offset, length, position);
@@ -130,7 +200,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, read`), {code: `EBADF`});
+      throw errors.EBADF(`readSync`);
 
     const [zipFs, realFd] = entry;
     return zipFs.readSync(realFd, buffer, offset, length, position);
@@ -149,7 +219,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, write`), {code: `EBADF`});
+      throw errors.EBADF(`write`);
 
     const [zipFs, realFd] = entry;
 
@@ -173,7 +243,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, write`), {code: `EBADF`});
+      throw errors.EBADF(`writeSync`);
 
     const [zipFs, realFd] = entry;
 
@@ -190,7 +260,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, close`), {code: `EBADF`});
+      throw errors.EBADF(`close`);
 
     this.fdMap.delete(fd);
 
@@ -204,7 +274,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
 
     const entry = this.fdMap.get(fd);
     if (typeof entry === `undefined`)
-      throw Object.assign(new Error(`EBADF: bad file descriptor, close`), {code: `EBADF`});
+      throw errors.EBADF(`closeSync`);
 
     this.fdMap.delete(fd);
 
@@ -238,7 +308,13 @@ export class ZipOpenFS extends BasePortableFakeFS {
     return await this.makeCallPromise(p, async () => {
       return await this.baseFs.realpathPromise(p);
     }, async (zipFs, {archivePath, subPath}) => {
-      return this.pathUtils.resolve(await this.baseFs.realpathPromise(archivePath), this.pathUtils.relative(PortablePath.root, await zipFs.realpathPromise(subPath)));
+      let realArchivePath = this.realPaths.get(archivePath);
+      if (typeof realArchivePath === `undefined`) {
+        realArchivePath = await this.baseFs.realpathPromise(archivePath);
+        this.realPaths.set(archivePath, realArchivePath);
+      }
+
+      return this.pathUtils.join(realArchivePath, this.pathUtils.relative(PortablePath.root, await zipFs.realpathPromise(subPath)));
     });
   }
 
@@ -246,7 +322,13 @@ export class ZipOpenFS extends BasePortableFakeFS {
     return this.makeCallSync(p, () => {
       return this.baseFs.realpathSync(p);
     }, (zipFs, {archivePath, subPath}) => {
-      return this.pathUtils.resolve(this.baseFs.realpathSync(archivePath), this.pathUtils.relative(PortablePath.root, zipFs.realpathSync(subPath)));
+      let realArchivePath = this.realPaths.get(archivePath);
+      if (typeof realArchivePath === `undefined`) {
+        realArchivePath = this.baseFs.realpathSync(archivePath);
+        this.realPaths.set(archivePath, realArchivePath);
+      }
+
+      return this.pathUtils.join(realArchivePath, this.pathUtils.relative(PortablePath.root, zipFs.realpathSync(subPath)));
     });
   }
 
@@ -282,35 +364,77 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
   }
 
-  async statPromise(p: PortablePath) {
+  async statPromise(p: PortablePath): Promise<Stats>
+  async statPromise(p: PortablePath, opts: {bigint: true}): Promise<BigIntStats>
+  async statPromise(p: PortablePath, opts?: {bigint: boolean}): Promise<BigIntStats | Stats>
+  async statPromise(p: PortablePath, opts?: { bigint: boolean }) {
     return await this.makeCallPromise(p, async () => {
-      return await this.baseFs.statPromise(p);
+      return await this.baseFs.statPromise(p, opts);
     }, async (zipFs, {subPath}) => {
-      return await zipFs.statPromise(subPath);
+      return await zipFs.statPromise(subPath, opts);
     });
   }
 
-  statSync(p: PortablePath) {
+  statSync(p: PortablePath): Stats
+  statSync(p: PortablePath, opts: {bigint: true}): BigIntStats
+  statSync(p: PortablePath, opts?: {bigint: boolean}): BigIntStats | Stats
+  statSync(p: PortablePath, opts?: { bigint: boolean }) {
     return this.makeCallSync(p, () => {
-      return this.baseFs.statSync(p);
+      return this.baseFs.statSync(p, opts);
     }, (zipFs, {subPath}) => {
-      return zipFs.statSync(subPath);
+      return zipFs.statSync(subPath, opts);
     });
   }
 
-  async lstatPromise(p: PortablePath) {
+  async fstatPromise(fd: number): Promise<Stats>
+  async fstatPromise(fd: number, opts: {bigint: true}): Promise<BigIntStats>
+  async fstatPromise(fd: number, opts?: {bigint: boolean}): Promise<BigIntStats | Stats>
+  async fstatPromise(fd: number, opts?: { bigint: boolean }) {
+    if ((fd & ZIP_FD) === 0)
+      return this.baseFs.fstatPromise(fd, opts);
+
+    const entry = this.fdMap.get(fd);
+    if (typeof entry === `undefined`)
+      throw errors.EBADF(`fstat`);
+
+    const [zipFs, realFd] = entry;
+    return zipFs.fstatPromise(realFd, opts);
+  }
+
+  fstatSync(fd: number): Stats
+  fstatSync(fd: number, opts: {bigint: true}): BigIntStats
+  fstatSync(fd: number, opts?: {bigint: boolean}): BigIntStats | Stats
+  fstatSync(fd: number, opts?: { bigint: boolean }) {
+    if ((fd & ZIP_FD) === 0)
+      return this.baseFs.fstatSync(fd, opts);
+
+    const entry = this.fdMap.get(fd);
+    if (typeof entry === `undefined`)
+      throw errors.EBADF(`fstatSync`);
+
+    const [zipFs, realFd] = entry;
+    return zipFs.fstatSync(realFd, opts);
+  }
+
+  async lstatPromise(p: PortablePath): Promise<Stats>
+  async lstatPromise(p: PortablePath, opts: {bigint: true}): Promise<BigIntStats>
+  async lstatPromise(p: PortablePath, opts?: { bigint: boolean }): Promise<BigIntStats | Stats>
+  async lstatPromise(p: PortablePath, opts?: { bigint: boolean }) {
     return await this.makeCallPromise(p, async () => {
-      return await this.baseFs.lstatPromise(p);
+      return await this.baseFs.lstatPromise(p, opts);
     }, async (zipFs, {subPath}) => {
-      return await zipFs.lstatPromise(subPath);
+      return await zipFs.lstatPromise(subPath, opts);
     });
   }
 
-  lstatSync(p: PortablePath) {
+  lstatSync(p: PortablePath): Stats;
+  lstatSync(p: PortablePath, opts: {bigint: true}): BigIntStats;
+  lstatSync(p: PortablePath, opts?: { bigint: boolean }): BigIntStats | Stats
+  lstatSync(p: PortablePath, opts?: { bigint: boolean }): BigIntStats | Stats {
     return this.makeCallSync(p, () => {
-      return this.baseFs.lstatSync(p);
+      return this.baseFs.lstatSync(p, opts);
     }, (zipFs, {subPath}) => {
-      return zipFs.lstatSync(subPath);
+      return zipFs.lstatSync(subPath, opts);
     });
   }
 
@@ -327,6 +451,22 @@ export class ZipOpenFS extends BasePortableFakeFS {
       return this.baseFs.chmodSync(p, mask);
     }, (zipFs, {subPath}) => {
       return zipFs.chmodSync(subPath, mask);
+    });
+  }
+
+  async chownPromise(p: PortablePath, uid: number, gid: number) {
+    return await this.makeCallPromise(p, async () => {
+      return await this.baseFs.chownPromise(p, uid, gid);
+    }, async (zipFs, {subPath}) => {
+      return await zipFs.chownPromise(subPath, uid, gid);
+    });
+  }
+
+  chownSync(p: PortablePath, uid: number, gid: number) {
+    return this.makeCallSync(p, () => {
+      return this.baseFs.chownSync(p, uid, gid);
+    }, (zipFs, {subPath}) => {
+      return zipFs.chownSync(subPath, uid, gid);
     });
   }
 
@@ -522,33 +662,49 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
   }
 
-  async rmdirPromise(p: PortablePath) {
+  async rmdirPromise(p: PortablePath, opts?: RmdirOptions) {
     return await this.makeCallPromise(p, async () => {
-      return await this.baseFs.rmdirPromise(p);
+      return await this.baseFs.rmdirPromise(p, opts);
     }, async (zipFs, {subPath}) => {
-      return await zipFs.rmdirPromise(subPath);
+      return await zipFs.rmdirPromise(subPath, opts);
     });
   }
 
-  rmdirSync(p: PortablePath) {
+  rmdirSync(p: PortablePath, opts?: RmdirOptions) {
     return this.makeCallSync(p, () => {
-      return this.baseFs.rmdirSync(p);
+      return this.baseFs.rmdirSync(p, opts);
     }, (zipFs, {subPath}) => {
-      return zipFs.rmdirSync(subPath);
+      return zipFs.rmdirSync(subPath, opts);
     });
   }
 
-  async symlinkPromise(target: PortablePath, p: PortablePath) {
+  async linkPromise(existingP: PortablePath, newP: PortablePath) {
+    return await this.makeCallPromise(newP, async () => {
+      return await this.baseFs.linkPromise(existingP, newP);
+    }, async (zipFs, {subPath}) => {
+      return await zipFs.linkPromise(existingP, subPath);
+    });
+  }
+
+  linkSync(existingP: PortablePath, newP: PortablePath) {
+    return this.makeCallSync(newP, () => {
+      return this.baseFs.linkSync(existingP, newP);
+    }, (zipFs, {subPath}) => {
+      return zipFs.linkSync(existingP, subPath);
+    });
+  }
+
+  async symlinkPromise(target: PortablePath, p: PortablePath, type?: SymlinkType) {
     return await this.makeCallPromise(p, async () => {
-      return await this.baseFs.symlinkPromise(target, p);
+      return await this.baseFs.symlinkPromise(target, p, type);
     }, async (zipFs, {subPath}) => {
       return await zipFs.symlinkPromise(target, subPath);
     });
   }
 
-  symlinkSync(target: PortablePath, p: PortablePath) {
+  symlinkSync(target: PortablePath, p: PortablePath, type?: SymlinkType) {
     return this.makeCallSync(p, () => {
-      return this.baseFs.symlinkSync(target, p);
+      return this.baseFs.symlinkSync(target, p, type);
     }, (zipFs, {subPath}) => {
       return zipFs.symlinkSync(target, subPath);
     });
@@ -630,23 +786,62 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
   }
 
+  async truncatePromise(p: PortablePath, len?: number) {
+    return await this.makeCallPromise(p, async () => {
+      return await this.baseFs.truncatePromise(p, len);
+    }, async (zipFs, {subPath}) => {
+      return await zipFs.truncatePromise(subPath, len);
+    });
+  }
+
+  truncateSync(p: PortablePath, len?: number) {
+    return this.makeCallSync(p, () => {
+      return this.baseFs.truncateSync(p, len);
+    }, (zipFs, {subPath}) => {
+      return zipFs.truncateSync(subPath, len);
+    });
+  }
+
   watch(p: PortablePath, cb?: WatchCallback): Watcher;
   watch(p: PortablePath, opts: WatchOptions, cb?: WatchCallback): Watcher;
   watch(p: PortablePath, a?: WatchOptions | WatchCallback, b?: WatchCallback) {
     return this.makeCallSync(p, () => {
       return this.baseFs.watch(
         p,
-        // @ts-ignore
+        // @ts-expect-error
         a,
         b,
       );
     }, (zipFs, {subPath}) => {
       return zipFs.watch(
         subPath,
-        // @ts-ignore
+        // @ts-expect-error
         a,
         b,
       );
+    });
+  }
+
+  watchFile(p: PortablePath, cb: WatchFileCallback): StatWatcher;
+  watchFile(p: PortablePath, opts: WatchFileOptions, cb: WatchFileCallback): StatWatcher;
+  watchFile(p: PortablePath, a: WatchFileOptions | WatchFileCallback, b?: WatchFileCallback) {
+    return this.makeCallSync(p, () => {
+      return this.baseFs.watchFile(
+        p,
+        // @ts-expect-error
+        a,
+        b,
+      );
+    }, () => {
+      return watchFile(this, p, a, b);
+    });
+  }
+
+  unwatchFile(p: PortablePath, cb?: WatchFileCallback): void {
+    return this.makeCallSync(p, () => {
+      return this.baseFs.unwatchFile(p, cb);
+    }, () => {
+      return unwatchFile(this, p, cb);
     });
   }
 
@@ -654,7 +849,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
     if (typeof p !== `string`)
       return await discard();
 
-    const normalizedP = this.pathUtils.normalize(this.pathUtils.resolve(PortablePath.root, p));
+    const normalizedP = this.resolve(p);
 
     const zipInfo = this.findZip(normalizedP);
     if (!zipInfo)
@@ -670,7 +865,7 @@ export class ZipOpenFS extends BasePortableFakeFS {
     if (typeof p !== `string`)
       return discard();
 
-    const normalizedP = this.pathUtils.normalize(this.pathUtils.resolve(PortablePath.root, p));
+    const normalizedP = this.resolve(p);
 
     const zipInfo = this.findZip(normalizedP);
     if (!zipInfo)
@@ -686,64 +881,70 @@ export class ZipOpenFS extends BasePortableFakeFS {
     if (this.filter && !this.filter.test(p))
       return null;
 
-    const parts = p.split(/\//g);
+    let filePath = `` as PortablePath;
 
-    for (let t = 2; t <= parts.length; ++t) {
-      const archivePath = parts.slice(0, t).join(`/`) as PortablePath;
+    while (true) {
+      const archivePart = getArchivePart(p.substr(filePath.length));
+      if (!archivePart)
+        return null;
 
-      if (this.notZip.has(archivePath))
-        continue;
+      filePath = this.pathUtils.join(filePath, archivePart);
 
-      if (this.isZip.has(archivePath))
-        return {archivePath, subPath: this.pathUtils.resolve(PortablePath.root, parts.slice(t).join(`/`) as PortablePath)};
+      if (this.isZip.has(filePath) === false) {
+        if (this.notZip.has(filePath))
+          continue;
 
-      let realArchivePath = archivePath;
-      let stat;
-
-      while (true) {
         try {
-          stat = this.baseFs.lstatSync(realArchivePath);
-        } catch (error) {
+          if (!this.baseFs.lstatSync(filePath).isFile()) {
+            this.notZip.add(filePath);
+            continue;
+          }
+        } catch {
           return null;
         }
 
-        if (stat.isSymbolicLink()) {
-          realArchivePath = this.pathUtils.resolve(this.pathUtils.dirname(realArchivePath), this.baseFs.readlinkSync(realArchivePath));
-        } else {
-          break;
-        }
+        this.isZip.add(filePath);
       }
 
-      const isZip = stat.isFile() && this.pathUtils.extname(realArchivePath) === `.zip`;
-
-      if (isZip) {
-        this.isZip.add(archivePath);
-        return {archivePath, subPath: this.pathUtils.resolve(PortablePath.root, parts.slice(t).join(`/`) as PortablePath)};
-      } else {
-        this.notZip.add(archivePath);
-        if (stat.isFile()) {
-          return null;
-        }
-      }
+      return {
+        archivePath: filePath,
+        subPath: this.pathUtils.join(PortablePath.root, p.substr(filePath.length) as PortablePath),
+      };
     }
-
-    return null;
   }
 
-  private limitOpenFiles(max: number) {
+  private limitOpenFilesTimeout: NodeJS.Timeout | null = null;
+  private limitOpenFiles(max: number | null) {
     if (this.zipInstances === null)
       return;
 
-    let closeCount = this.zipInstances.size - max;
+    const now = Date.now();
+    let nextExpiresAt = now + this.maxAge;
+    let closeCount = max === null ? 0 : this.zipInstances.size - max;
 
-    for (const [path, zipFs] of this.zipInstances.entries()) {
-      if (closeCount <= 0)
+    for (const [path, {zipFs, expiresAt, refCount}] of this.zipInstances.entries()) {
+      if (refCount !== 0 || zipFs.hasOpenFileHandles()) {
+        continue;
+      } else if (now >= expiresAt) {
+        zipFs.saveAndClose();
+        this.zipInstances.delete(path);
+        closeCount -= 1;
+        continue;
+      } else if (max === null || closeCount <= 0) {
+        nextExpiresAt = expiresAt;
         break;
+      }
 
       zipFs.saveAndClose();
       this.zipInstances.delete(path);
-
       closeCount -= 1;
+    }
+
+    if (this.limitOpenFilesTimeout === null && ((max === null && this.zipInstances.size > 0) || max !== null)) {
+      this.limitOpenFilesTimeout = setTimeout(() => {
+        this.limitOpenFilesTimeout = null;
+        this.limitOpenFiles(null);
+      }, nextExpiresAt - now).unref();
     }
   }
 
@@ -756,19 +957,36 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
 
     if (this.zipInstances) {
-      let zipFs = this.zipInstances.get(p);
+      let cachedZipFs = this.zipInstances.get(p);
 
-      if (!zipFs)
-        zipFs = new ZipFS(p, await getZipOptions());
+      if (!cachedZipFs) {
+        const zipOptions = await getZipOptions();
+
+        // We need to recheck because concurrent getZipPromise calls may
+        // have instantiated the zip archive while we were waiting
+        cachedZipFs = this.zipInstances.get(p);
+        if (!cachedZipFs) {
+          cachedZipFs = {
+            zipFs: new ZipFS(p, zipOptions),
+            expiresAt: 0,
+            refCount: 0,
+          };
+        }
+      }
 
       // Removing then re-adding the field allows us to easily implement
       // a basic LRU garbage collection strategy
       this.zipInstances.delete(p);
-      this.zipInstances.set(p, zipFs);
+      this.limitOpenFiles(this.maxOpenFiles - 1);
+      this.zipInstances.set(p, cachedZipFs);
 
-      this.limitOpenFiles(this.maxOpenFiles);
-
-      return await accept(zipFs);
+      cachedZipFs.expiresAt = Date.now() + this.maxAge;
+      cachedZipFs.refCount += 1;
+      try {
+        return await accept(cachedZipFs.zipFs);
+      } finally {
+        cachedZipFs.refCount -= 1;
+      }
     } else {
       const zipFs = new ZipFS(p, await getZipOptions());
 
@@ -789,19 +1007,24 @@ export class ZipOpenFS extends BasePortableFakeFS {
     });
 
     if (this.zipInstances) {
-      let zipFs = this.zipInstances.get(p);
+      let cachedZipFs = this.zipInstances.get(p);
 
-      if (!zipFs)
-        zipFs = new ZipFS(p, getZipOptions());
+      if (!cachedZipFs) {
+        cachedZipFs = {
+          zipFs: new ZipFS(p, getZipOptions()),
+          expiresAt: 0,
+          refCount: 0,
+        };
+      }
 
       // Removing then re-adding the field allows us to easily implement
       // a basic LRU garbage collection strategy
       this.zipInstances.delete(p);
-      this.zipInstances.set(p, zipFs);
+      this.limitOpenFiles(this.maxOpenFiles - 1);
+      this.zipInstances.set(p, cachedZipFs);
 
-      this.limitOpenFiles(this.maxOpenFiles);
-
-      return accept(zipFs);
+      cachedZipFs.expiresAt = Date.now() + this.maxAge;
+      return accept(cachedZipFs.zipFs);
     } else {
       const zipFs = new ZipFS(p, getZipOptions());
 

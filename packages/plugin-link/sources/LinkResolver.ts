@@ -41,6 +41,10 @@ export class LinkResolver implements Resolver {
     return [structUtils.makeLocator(descriptor, `${LINK_PROTOCOL}${npath.toPortablePath(path)}`)];
   }
 
+  async getSatisfying(descriptor: Descriptor, references: Array<string>, opts: ResolveOptions) {
+    return null;
+  }
+
   async resolve(locator: Locator, opts: ResolveOptions): Promise<Package> {
     if (!opts.fetchOptions)
       throw new Error(`Assertion failed: This resolver cannot be used unless a fetcher is configured`);
@@ -56,10 +60,10 @@ export class LinkResolver implements Resolver {
 
       version: manifest.version || `0.0.0`,
 
-      languageName: opts.project.configuration.get(`defaultLanguageName`),
+      languageName: manifest.languageName || opts.project.configuration.get(`defaultLanguageName`),
       linkType: LinkType.SOFT,
 
-      dependencies: new Map([...manifest.dependencies, ...manifest.devDependencies]),
+      dependencies: new Map([...manifest.dependencies]),
       peerDependencies: manifest.peerDependencies,
 
       dependenciesMeta: manifest.dependenciesMeta,

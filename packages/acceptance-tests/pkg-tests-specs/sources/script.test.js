@@ -1,8 +1,8 @@
-const {npath, xfs} = require(`@yarnpkg/fslib`);
-const {isAbsolute, resolve} = require('path');
+const {npath, ppath, xfs} = require(`@yarnpkg/fslib`);
+const {isAbsolute, resolve} = require(`path`);
 
 const {
-  fs: {createTemporaryFolder, makeFakeBinary, walk, readFile},
+  fs: {createTemporaryFolder, makeFakeBinary, walk, readFile, writeJson, writeFile},
 } = require(`pkg-tests-core`);
 
 const globalName = makeTemporaryEnv.getPackageManagerName();
@@ -170,9 +170,111 @@ describe(`Scripts tests`, () => {
       await run(`install`);
 
       await expect(source(`require('no-deps-scripted/log.js')`)).resolves.toEqual([
-        'preinstall',
-        'install',
-        'postinstall',
+        `preinstall`,
+        `install`,
+        `postinstall`,
+      ]);
+    }),
+  );
+
+  test(
+    `it should trigger the postinstall scripts in the right order, children before parents`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [
+        `child`,
+      ],
+      dependencies: {
+        [`child`]: `workspace:*`,
+      },
+      scripts: {
+        [`install`]: `echo 'module.exports.push("root");' >> log.js`,
+      },
+    }, async ({path, run, source}) => {
+      await xfs.mkdirPromise(ppath.join(path, `child`));
+      await xfs.writeJsonPromise(ppath.join(path, `child/package.json`), {
+        name: `child`,
+        scripts: {
+          [`install`]: `echo 'module.exports.push("child");' >> ../log.js`,
+        },
+      });
+
+      await xfs.writeFilePromise(ppath.join(path, `log.js`), `module.exports = [];\n`);
+      await run(`install`);
+
+      await expect(source(`require("./log")`)).resolves.toEqual([
+        `child`,
+        `root`,
+      ]);
+    }),
+  );
+
+  test(
+    `it should trigger the postinstall when a dependency gets its dependency tree modified`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [
+        `child`,
+      ],
+      dependencies: {
+        [`child`]: `workspace:*`,
+      },
+      scripts: {
+        [`install`]: `echo 'module.exports.push("root");' >> log.js`,
+      },
+    }, async ({path, run, source}) => {
+      await xfs.mkdirPromise(ppath.join(path, `child`), {recursive: true});
+      await xfs.writeJsonPromise(ppath.join(path, `child/package.json`), {
+        name: `child`,
+        scripts: {
+          postinstall: `echo 'module.exports.push("child");' >> ../log.js`,
+        },
+      });
+
+      await run(`install`);
+      await xfs.writeFilePromise(ppath.join(path, `log.js`), `module.exports = [];\n`);
+
+      await run(`./child`, `add`, `no-deps@1.0.0`);
+
+      await expect(source(`require('./log')`)).resolves.toEqual([
+        `child`,
+        `root`,
+      ]);
+    }),
+  );
+
+  test(
+    `it shouldn't trigger the postinstall if an unrelated branch of the tree is modified`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [
+        `packages/*`,
+      ],
+      dependencies: {
+        [`first`]: `workspace:*`,
+      },
+      scripts: {
+        [`install`]: `echo 'module.exports.push("root");' >> log.js`,
+      },
+    }, async ({path, run, source}) => {
+      await xfs.mkdirPromise(ppath.join(path, `packages/first`), {recursive: true});
+      await xfs.mkdirPromise(ppath.join(path, `packages/second`), {recursive: true});
+
+      await xfs.writeJsonPromise(ppath.join(path, `packages/first/package.json`), {
+        name: `first`,
+      });
+
+      await xfs.writeJsonPromise(ppath.join(path, `packages/second/package.json`), {
+        name: `bar`,
+      });
+
+      await run(`install`);
+      await xfs.writeFilePromise(ppath.join(path, `log.js`), `module.exports = [];`);
+
+      await run(`packages/second`, `add`, `no-deps@1.0.0`);
+
+      await expect(source(`require('./log')`)).resolves.toEqual([
+        // Must be empty, since the postinstall script shouldn't have run
       ]);
     }),
   );
@@ -251,7 +353,7 @@ describe(`Scripts tests`, () => {
 
         expect(itemPath).toBeDefined();
 
-        const content = await readFile(itemPath, 'utf8');
+        const content = await readFile(itemPath, `utf8`);
         await expect(content).toEqual(npath.fromPortablePath(itemPath));
       },
     ),
@@ -280,5 +382,167 @@ describe(`Scripts tests`, () => {
         `postinstall`,
       ]);
     }),
+  );
+
+  test(
+    `it should correctly run empty install scripts`,
+    makeTemporaryEnv({dependencies: {[`no-deps-scripted-empty`]: `1.0.0`}}, async ({path, run, source}) => {
+      await run(`install`);
+    }),
+  );
+
+  test(
+    `it should set INIT_CWD`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [`packages/*`],
+    }, async ({path, run, source}) => {
+      await xfs.mkdirpPromise(`${path}/packages/test`);
+
+      await xfs.writeJsonPromise(`${path}/packages/test/package.json`, {
+        scripts: {
+          [`test:script`]: `echo "$INIT_CWD"`,
+        },
+      });
+
+      await run(`install`);
+
+      await expect(run(`run`, `test:script`)).resolves.toMatchObject({
+        stdout: `${npath.fromPortablePath(path)}\n`,
+      });
+
+      await expect(run(`run`, `test:script`, {
+        cwd: `${path}/packages`,
+      })).resolves.toMatchObject({
+        stdout: `${npath.fromPortablePath(`${path}/packages`)}\n`,
+      });
+    })
+  );
+
+  test(
+    `it should set PROJECT_CWD`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [`packages/*`],
+    }, async ({path, run, source}) => {
+      await xfs.mkdirpPromise(`${path}/packages/test`);
+
+      await xfs.writeJsonPromise(`${path}/packages/test/package.json`, {
+        scripts: {
+          [`test:script`]: `echo "$PROJECT_CWD"`,
+        },
+      });
+
+      await run(`install`);
+
+      await expect(run(`run`, `test:script`)).resolves.toMatchObject({
+        stdout: `${npath.fromPortablePath(path)}\n`,
+      });
+
+      await expect(run(`run`, `test:script`, {
+        cwd: `${path}/packages`,
+      })).resolves.toMatchObject({
+        stdout: `${npath.fromPortablePath(path)}\n`,
+      });
+    })
+  );
+
+  test(
+    `it should correctly run scripts when project path has space inside`,
+    makeTemporaryEnv({
+      private: true,
+      workspaces: [`packages/*`],
+    }, async ({path, run, source}) => {
+      await writeJson(`${path}/packages/test 1/package.json`, {
+        scripts: {
+          [`ws:foo2`]: `yarn run ws:foo`,
+          [`ws:foo`]: `node -e 'console.log(1)'`,
+        },
+      });
+
+      await run(`install`);
+
+      await expect(run(`run`, `ws:foo2`)).resolves.toMatchObject({
+        stdout: `1\n`,
+      });
+    })
+  );
+
+  test(
+    `it should make expose some basic information via the environment`,
+    makeTemporaryEnv({
+      name: `helloworld`,
+      version: `1.2.3`,
+      scripts: {
+        [`test`]: `node -p 'JSON.stringify(process.env)'`,
+      },
+    }, async ({path, run, source}) => {
+      await run(`install`);
+
+      const {stdout} = await run(`run`, `test`);
+      const env = JSON.parse(stdout);
+
+      expect(env).toMatchObject({
+        npm_package_name: `helloworld`,
+        npm_package_version: `1.2.3`,
+      });
+    })
+  );
+
+  test(
+    `it should setup the correct path for locally installed binaries`,
+    makeTemporaryEnv({
+      scripts: {
+        [`test`]: `node test`,
+      },
+      dependencies: {
+        [`has-bin-entries`]: `1.0.0`,
+      },
+    }, async ({path, run, source}) => {
+      await run(`install`);
+
+      await writeFile(`${path}/test.js`, `
+      const {existsSync} = require('fs');
+      const {join} = require('path');
+
+      const files = ['has-bin-entries'];
+      if (process.platform === 'win32')
+        files.push('has-bin-entries.cmd');
+
+      for (const file of files) {
+        if (!existsSync(join(process.env.BERRY_BIN_FOLDER, file))) {
+          console.error('Expected ' + file + ' to exist');
+          process.exit(1);
+        }
+      }
+
+      console.log('ok');
+      `);
+
+      await expect(run(`test`)).resolves.toMatchObject({
+        stdout: `ok\n`,
+      });
+    })
+  );
+
+  test(
+    `it should be able to spawn binaries with a utf-8 path`,
+    makeTemporaryEnv(
+      {
+        name: `testbin`,
+        bin: `å.js`,
+        scripts: {
+          [`test`]: `testbin`,
+        },
+      },
+      async ({path, run, source}) => {
+        await xfs.writeFilePromise(`${path}/å.js`, `console.log('ok')`);
+        await run(`install`);
+
+        await expect(run(`test`)).resolves.toMatchObject({
+          stdout: `ok\n`,
+        });
+      }
+    )
   );
 });

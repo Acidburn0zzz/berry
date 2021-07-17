@@ -1,7 +1,9 @@
+import {npath} from '@yarnpkg/fslib';
+
 const {
   fs: {mkdirp, writeFile},
   misc: {parseJsonStream},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 describe(`Features`, () => {
   describe(`Project detection`, () => {
@@ -15,7 +17,7 @@ describe(`Features`, () => {
             `key`,
           )).toMatchObject({
             [`cacheFolder`]: {
-              effective: `${path}/.yarn/cache`,
+              effective: npath.fromPortablePath(`${path}/.yarn/cache`),
             },
           });
         },
@@ -36,7 +38,7 @@ describe(`Features`, () => {
             `key`,
           )).toMatchObject({
             [`cacheFolder`]: {
-              effective: `${path}/.yarn/cache`,
+              effective: npath.fromPortablePath(`${path}/.yarn/cache`),
             },
           });
         },
@@ -58,7 +60,7 @@ describe(`Features`, () => {
             `key`,
           )).toMatchObject({
             [`cacheFolder`]: {
-              effective: `${path}/subfolder/.yarn/cache`,
+              effective: npath.fromPortablePath(`${path}/subfolder/.yarn/cache`),
             },
           });
         },

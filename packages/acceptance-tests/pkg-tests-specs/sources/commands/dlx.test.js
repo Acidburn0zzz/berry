@@ -1,6 +1,9 @@
 const {
-  tests: {setPackageWhitelist},
-} = require('pkg-tests-core');
+  fs: {writeFile, realpath},
+  tests: {setPackageWhitelist, startPackageServer},
+} = require(`pkg-tests-core`);
+
+const AUTH_TOKEN = `686159dc-64b3-413e-a244-2de2b8d1c36f`;
 
 describe(`Commands`, () => {
   describe(`dlx`, () => {
@@ -18,6 +21,15 @@ describe(`Commands`, () => {
       makeTemporaryEnv({}, async ({path, run, source}) => {
         await expect(run(`dlx`, `-q`, `has-bin-entries`, `--foo`, `hello`, `world`)).resolves.toMatchObject({
           stdout: `--foo\nhello\nworld\n`,
+        });
+      }),
+    );
+
+    test(
+      `it should return the exit code from the binary`,
+      makeTemporaryEnv({}, async ({path, run, source}) => {
+        await expect(run(`dlx`, `-q`, `-p`, `has-bin-entries`, `has-bin-entries-with-exit-code`, `42`)).rejects.toMatchObject({
+          code: 42,
         });
       }),
     );
@@ -55,6 +67,90 @@ describe(`Commands`, () => {
           });
         });
       }),
+    );
+
+    test(
+      `it should respect locally configured registry scopes`,
+      makeTemporaryEnv({}, async ({path, run, source}) => {
+        const url = await startPackageServer();
+
+        await writeFile(`${path}/.yarnrc.yml`, [
+          `npmScopes:`,
+          `  private:`,
+          `    npmRegistryServer: "${url}"`,
+          `    npmAuthToken: ${AUTH_TOKEN}`,
+        ].join(`\n`));
+
+        await expect(run(`dlx`, `-q`, `@private/has-bin-entry`)).resolves.toMatchObject({
+          stdout: `1.0.0\n`,
+        });
+      })
+    );
+
+    test(
+      `it should not fail when plugins are locally enabled using a string entry with a relative path`,
+      makeTemporaryEnv({}, async ({path, run, source}) => {
+        const url = await startPackageServer();
+
+        await writeFile(`${path}/.yarnrc.yml`, [
+          `plugins:`,
+          `  - ${JSON.stringify(require.resolve(`@yarnpkg/monorepo/scripts/plugin-version.js`))}`,
+          `npmScopes:`,
+          `  private:`,
+          `    npmRegistryServer: "${url}"`,
+          `    npmAuthToken: ${AUTH_TOKEN}`,
+          `preferDeferredVersions: true`,
+        ].join(`\n`));
+
+        await expect(run(`dlx`, `-q`, `@private/has-bin-entry`)).resolves.toMatchObject({
+          stdout: `1.0.0\n`,
+        });
+      })
+    );
+
+    test(
+      `it should not fail when plugins are locally enabled using a string entry with an absolute path`,
+      makeTemporaryEnv({}, async ({path, run, source}) => {
+        const url = await startPackageServer();
+
+        const relativePluginPath = require.resolve(`@yarnpkg/monorepo/scripts/plugin-version.js`);
+
+        await writeFile(`${path}/.yarnrc.yml`, [
+          `plugins:`,
+          `  - ${await realpath(relativePluginPath)}`,
+          `npmScopes:`,
+          `  private:`,
+          `    npmRegistryServer: "${url}"`,
+          `    npmAuthToken: ${AUTH_TOKEN}`,
+          `preferDeferredVersions: true`,
+        ].join(`\n`));
+
+        await expect(run(`dlx`, `-q`, `@private/has-bin-entry`)).resolves.toMatchObject({
+          stdout: `1.0.0\n`,
+        });
+      })
+    );
+
+    test(
+      `it should not fail when plugins are locally enabled using an object entry`,
+      makeTemporaryEnv({}, async ({path, run, source}) => {
+        const url = await startPackageServer();
+
+        await writeFile(`${path}/.yarnrc.yml`, [
+          `plugins:`,
+          `  - path: ${JSON.stringify(require.resolve(`@yarnpkg/monorepo/scripts/plugin-version.js`))}`,
+          `    spec: "@yarnpkg/plugin-version"`,
+          `npmScopes:`,
+          `  private:`,
+          `    npmRegistryServer: "${url}"`,
+          `    npmAuthToken: ${AUTH_TOKEN}`,
+          `preferDeferredVersions: true`,
+        ].join(`\n`));
+
+        await expect(run(`dlx`, `-q`, `@private/has-bin-entry`)).resolves.toMatchObject({
+          stdout: `1.0.0\n`,
+        });
+      })
     );
   });
 });

@@ -1,7 +1,7 @@
 const {
   fs: {writeFile, writeJson},
   exec: {execFile},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 describe(`Commands`, () => {
   describe(`version check`, () => {
@@ -182,6 +182,7 @@ function makeVersionCheckEnv(cb) {
     // Otherwise we can't always commit
     await git(`config`, `user.name`, `John Doe`);
     await git(`config`, `user.email`, `john.doe@example.org`);
+    await git(`config`, `commit.gpgSign`, `false`);
 
     await git(`add`, `.`);
     await git(`commit`, `-m`, `First commit`);

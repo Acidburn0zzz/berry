@@ -1,33 +1,38 @@
 {
   "name": "@yarnpkg/plugin-interactive-tools",
-  "version": "2.0.0-rc.17",
+  "version": "3.0.0-rc.9",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "dependencies": {
-    "@yarnpkg/libui": "workspace:^2.0.0-rc.7",
-    "clipanion": "^2.1.5",
+    "@yarnpkg/libui": "workspace:^2.1.2-rc.9",
+    "algoliasearch": "^4.2.0",
+    "clipanion": "^3.0.0-rc.10",
     "diff": "^4.0.1",
-    "ink": "^2.3.0",
-    "react": "^16.8.4",
-    "semver": "^7.1.2"
+    "ink": "^3.0.8",
+    "ink-text-input": "^4.0.1",
+    "react": "^16.13.1",
+    "semver": "^7.1.2",
+    "tslib": "^1.13.0"
   },
   "peerDependencies": {
-    "@yarnpkg/cli": "^2.0.0-rc.29",
-    "@yarnpkg/core": "^2.0.0-rc.23",
-    "@yarnpkg/plugin-essentials": "^2.0.0-rc.23"
+    "@yarnpkg/cli": "^3.0.0-rc.9",
+    "@yarnpkg/core": "^3.0.0-rc.9",
+    "@yarnpkg/plugin-essentials": "^3.0.0-rc.9"
   },
   "devDependencies": {
     "@types/diff": "^4.0.2",
     "@types/react": "^16.8.0",
     "@types/semver": "^7.1.0",
-    "@yarnpkg/builder": "workspace:^2.0.0-rc.19",
-    "@yarnpkg/cli": "workspace:^2.0.0-rc.29",
-    "@yarnpkg/core": "workspace:^2.0.0-rc.23",
-    "@yarnpkg/plugin-essentials": "workspace:^2.0.0-rc.23",
-    "typescript": "^3.7.5"
+    "@yarnpkg/builder": "workspace:*",
+    "@yarnpkg/cli": "workspace:*",
+    "@yarnpkg/core": "workspace:*",
+    "@yarnpkg/plugin-essentials": "workspace:*",
+    "typescript": "^4.3.2"
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-interactive-tools"
   },
   "scripts": {
     "build:plugin-interactive-tools": "builder build plugin",
@@ -41,5 +46,9 @@
   },
   "files": [
     "/lib/**/*"
-  ]
+  ],
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.2.0"
 }

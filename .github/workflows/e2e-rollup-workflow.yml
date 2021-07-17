@@ -9,19 +9,19 @@ on:
     - .github/workflows/e2e-rollup-workflow.yml
     - scripts/e2e-setup-ci.sh
 
-name: 'E2E rollup.js'
+name: 'E2E Rollup'
 jobs:
   chore:
-    name: 'Validating rollup.js'
+    name: 'Validating Rollup'
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@master
 
-    - name: 'Use Node.js 10.x'
+    - name: 'Install Node'
       uses: actions/setup-node@master
       with:
-        node-version: 10.x
+        node-version: 14.x
 
     - name: 'Build the standard bundle'
       run: |

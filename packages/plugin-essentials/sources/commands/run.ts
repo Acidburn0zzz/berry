@@ -1,35 +1,13 @@
-import {BaseCommand}                                    from '@yarnpkg/cli';
-import {Configuration, Project, Workspace, ThrowReport} from '@yarnpkg/core';
-import {scriptUtils, structUtils}                       from '@yarnpkg/core';
-import {Command, Usage, UsageError}                     from 'clipanion';
-
-import {pluginCommands}                                 from '../pluginCommands';
+import {BaseCommand, pluginCommands}        from '@yarnpkg/cli';
+import {Configuration, Project, Workspace}  from '@yarnpkg/core';
+import {scriptUtils, structUtils}           from '@yarnpkg/core';
+import {Command, Option, Usage, UsageError} from 'clipanion';
 
 // eslint-disable-next-line arca/no-default-export
 export default class RunCommand extends BaseCommand {
-  // This flag is mostly used to give users a way to configure node-gyp. They
-  // just have to add it as a top-level workspace.
-  @Command.Boolean(`-T,--top-level`, {hidden: true})
-  topLevel: boolean = false;
-
-  // Some tools (for example text editors) want to call the real binaries, not
-  // what their users might have remapped them to in their `scripts` field.
-  @Command.Boolean(`-B,--binaries-only`, {hidden: true})
-  binariesOnly: boolean = false;
-
-  // The v1 used to print the Yarn version header when using "yarn run", which
-  // was messing with the output of things like `--version` & co. We don't do
-  // this anymore, but many workflows use `yarn run --silent` to make sure that
-  // they don't get this header, and it makes sense to support it as well (even
-  // if it's a no-op in our case).
-  @Command.Boolean(`--silent`, {hidden: true})
-  silent?: boolean;
-
-  @Command.String()
-  scriptName!: string;
-
-  @Command.Proxy()
-  args: Array<string> = [];
+  static paths = [
+    [`run`],
+  ];
 
   static usage: Usage = Command.Usage({
     description: `run a script defined in the package.json`,
@@ -50,18 +28,45 @@ export default class RunCommand extends BaseCommand {
     ], [
       `Same thing, but without the "run" keyword`,
       `$0 test`,
+    ], [
+      `Inspect Webpack while running`,
+      `$0 run --inspect-brk webpack`,
     ]],
   });
 
-  @Command.Path(`run`)
+  inspect = Option.String(`--inspect`, false, {
+    tolerateBoolean: true,
+    description: `Forwarded to the underlying Node process when executing a binary`,
+  });
+
+  inspectBrk = Option.String(`--inspect-brk`, false, {
+    tolerateBoolean: true,
+    description: `Forwarded to the underlying Node process when executing a binary`,
+  });
+
+  // This flag is mostly used to give users a way to configure node-gyp. They
+  // just have to add it as a top-level workspace.
+  topLevel = Option.Boolean(`-T,--top-level`, false, {hidden: true});
+
+  // Some tools (for example text editors) want to call the real binaries, not
+  // what their users might have remapped them to in their `scripts` field.
+  binariesOnly = Option.Boolean(`-B,--binaries-only`, false, {hidden: true});
+
+  // The v1 used to print the Yarn version header when using "yarn run", which
+  // was messing with the output of things like `--version` & co. We don't do
+  // this anymore, but many workflows use `yarn run --silent` to make sure that
+  // they don't get this header, and it makes sense to support it as well (even
+  // if it's a no-op in our case).
+  silent = Option.Boolean(`--silent`, {hidden: true});
+
+  scriptName = Option.String();
+  args = Option.Proxy();
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project, workspace, locator} = await Project.find(configuration, this.context.cwd);
 
-    await project.resolveEverything({
-      lockfileOnly: true,
-      report: new ThrowReport(),
-    });
+    await project.restoreInstallState();
 
     const effectiveLocator = this.topLevel
       ? project.topLevelWorkspace.anchoredLocator
@@ -79,8 +84,35 @@ export default class RunCommand extends BaseCommand {
     const binaries = await scriptUtils.getPackageAccessibleBinaries(effectiveLocator, {project});
     const binary = binaries.get(this.scriptName);
 
-    if (binary)
-      return await scriptUtils.executePackageAccessibleBinary(effectiveLocator, this.scriptName, this.args, {cwd: this.context.cwd, project, stdin: this.context.stdin, stdout: this.context.stdout, stderr: this.context.stderr});
+    if (binary) {
+      const nodeArgs = [];
+
+      if (this.inspect) {
+        if (typeof this.inspect === `string`) {
+          nodeArgs.push(`--inspect=${this.inspect}`);
+        } else {
+          nodeArgs.push(`--inspect`);
+        }
+      }
+
+      if (this.inspectBrk) {
+        if (typeof this.inspectBrk === `string`) {
+          nodeArgs.push(`--inspect-brk=${this.inspectBrk}`);
+        } else {
+          nodeArgs.push(`--inspect-brk`);
+        }
+      }
+
+      return await scriptUtils.executePackageAccessibleBinary(effectiveLocator, this.scriptName, this.args, {
+        cwd: this.context.cwd,
+        project,
+        stdin: this.context.stdin,
+        stdout: this.context.stdout,
+        stderr: this.context.stderr,
+        nodeArgs,
+        packageAccessibleBinaries: binaries,
+      });
+    }
 
     // When it fails, we try to check whether it's a global script (ie we look
     // into all the workspaces to find one that exports this script). We only do
@@ -91,11 +123,11 @@ export default class RunCommand extends BaseCommand {
     // not workspaces). No particular reason except maybe security concerns.
 
     if (!this.topLevel && !this.binariesOnly && workspace && this.scriptName.includes(`:`)) {
-      let candidateWorkspaces = await Promise.all(project.workspaces.map(async workspace => {
+      const candidateWorkspaces = await Promise.all(project.workspaces.map(async workspace => {
         return workspace.manifest.scripts.has(this.scriptName) ? workspace : null;
       }));
 
-      let filteredWorkspaces = candidateWorkspaces.filter(workspace => {
+      const filteredWorkspaces = candidateWorkspaces.filter(workspace => {
         return workspace !== null;
       }) as Array<Workspace>;
 

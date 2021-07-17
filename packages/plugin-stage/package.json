@@ -1,20 +1,22 @@
 {
   "name": "@yarnpkg/plugin-stage",
-  "version": "2.0.0-rc.15",
+  "version": "3.0.0-rc.9",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "dependencies": {
-    "@yarnpkg/fslib": "workspace:^2.0.0-rc.16",
-    "clipanion": "^2.1.5"
+    "@yarnpkg/fslib": "workspace:^2.5.0-rc.9",
+    "clipanion": "^3.0.0-rc.10",
+    "tslib": "^1.13.0"
   },
   "peerDependencies": {
-    "@yarnpkg/cli": "^2.0.0-rc.29",
-    "@yarnpkg/core": "^2.0.0-rc.23"
+    "@yarnpkg/cli": "^3.0.0-rc.9",
+    "@yarnpkg/core": "^3.0.0-rc.9"
   },
   "devDependencies": {
-    "@yarnpkg/builder": "workspace:^2.0.0-rc.19",
-    "@yarnpkg/cli": "workspace:^2.0.0-rc.29",
-    "@yarnpkg/core": "workspace:^2.0.0-rc.23",
-    "typescript": "^3.7.5"
+    "@yarnpkg/builder": "workspace:*",
+    "@yarnpkg/cli": "workspace:*",
+    "@yarnpkg/core": "workspace:*",
+    "typescript": "^4.3.2"
   },
   "scripts": {
     "build:plugin-stage": "builder build plugin",
@@ -24,7 +26,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/plugin-stage"
   },
   "publishConfig": {
     "main": "./lib/index.js",
@@ -32,5 +35,9 @@
   },
   "files": [
     "/lib/**/*"
-  ]
+  ],
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.1.2"
 }

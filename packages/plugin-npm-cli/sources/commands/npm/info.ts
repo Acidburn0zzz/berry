@@ -1,19 +1,19 @@
-import * as npm                                                       from '@npm/types';
-import {BaseCommand}                                                  from '@yarnpkg/cli';
-import {Project, Configuration, structUtils, ReportError, Descriptor} from '@yarnpkg/core';
-import {StreamReport, MessageName}                                    from '@yarnpkg/core';
-import {npmHttpUtils}                                                 from '@yarnpkg/plugin-npm';
-import {Command, Usage, UsageError}                                   from 'clipanion';
-import path                                                           from 'path';
-import semver                                                         from 'semver';
-import {inspect}                                                      from 'util';
+import * as npm                                          from '@npm/types';
+import {BaseCommand}                                     from '@yarnpkg/cli';
+import {Project, Configuration, structUtils, Descriptor} from '@yarnpkg/core';
+import {StreamReport, MessageName, semverUtils}          from '@yarnpkg/core';
+import {npmHttpUtils}                                    from '@yarnpkg/plugin-npm';
+import {Command, Option, Usage, UsageError}              from 'clipanion';
+import path                                              from 'path';
+import semver                                            from 'semver';
+import {inspect}                                         from 'util';
 
 declare module '@npm/types' {
   /*
    * Add missing property `users` on interface `Packument`
    */
   interface Packument {
-    users: Record<string, boolean>[];
+    users: Array<Record<string, boolean>>;
   }
 }
 
@@ -26,21 +26,17 @@ type CombinedPackument = Omit<npm.Packument, 'versions'> & npm.PackumentVersion;
  * `CombinedPackument` with a `versions` field that is an array of tags
  */
 interface PackageInformation extends CombinedPackument {
-  versions: string[];
+  versions: Array<string>;
 }
 
 // eslint-disable-next-line arca/no-default-export
 export default class InfoCommand extends BaseCommand {
-  @Command.Rest()
-  packages!: string;
-
-  @Command.String(`-f,--fields`)
-  fields?: string;
-
-  @Command.Boolean(`--json`)
-  json: boolean = false;
+  static paths = [
+    [`npm`, `info`],
+  ];
 
   static usage: Usage = Command.Usage({
+    category: `Npm-related commands`,
     description: `show information about a package`,
     details: `
       This command will fetch information about a package from the npm registry, and prints it in a tree format.
@@ -52,8 +48,6 @@ export default class InfoCommand extends BaseCommand {
       If the \`-f,--fields\` option is set, it's a comma-separated list of fields which will be used to only display part of the package informations.
 
       By default, this command won't return the \`dist\`, \`readme\`, and \`users\` fields, since they are often very long. To explicitly request those fields, explicitly list them with the \`--fields\` flag or request the output in JSON mode.
-
-      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
     `,
     examples: [[
       `Show all available information about react (except the \`dist\`, \`readme\`, and \`users\` fields)`,
@@ -79,7 +73,16 @@ export default class InfoCommand extends BaseCommand {
     ]],
   });
 
-  @Command.Path(`npm`, `info`)
+  fields = Option.String(`-f,--fields`, {
+    description: `A comma-separated list of manifest fields that should be displayed`,
+  });
+
+  json = Option.Boolean(`--json`, false, {
+    description: `Format the output as an NDJSON stream`,
+  });
+
+  packages = Option.Rest();
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project} = await Project.find(configuration, this.context.cwd);
@@ -111,31 +114,22 @@ export default class InfoCommand extends BaseCommand {
 
         const identUrl = npmHttpUtils.getIdentUrl(descriptor);
 
-        let result: npm.Packument;
-        try {
-          // The information from `registry.npmjs.org/<package>`
-          result = clean(await npmHttpUtils.get(identUrl, {
-            configuration,
-            ident: descriptor,
-            json: true,
-          })) as npm.Packument;
-        } catch (err) {
-          if (err.name !== `HTTPError`) {
-            throw err;
-          } else if (err.response.statusCode === 404) {
-            throw new ReportError(MessageName.EXCEPTION, `Package not found`);
-          } else {
-            throw new ReportError(MessageName.EXCEPTION, err.toString());
-          }
-        }
+        // The information from `registry.npmjs.org/<package>`
+        const result: npm.Packument = clean(await npmHttpUtils.get(identUrl, {
+          configuration,
+          ident: descriptor,
+          jsonResponse: true,
+          customErrorMessage: npmHttpUtils.customPackageError,
+        })) as npm.Packument;
 
         const versions = Object.keys(result.versions).sort(semver.compareLoose);
         const fallbackVersion = result[`dist-tags`].latest || versions[versions.length - 1];
 
         // The latest version that satisfies `descriptor.range` (if it is a valid range), else `fallbackVersion`
         let version: string = fallbackVersion;
-        if (semver.validRange(descriptor.range)) {
-          const maxSatisfyingVersion = semver.maxSatisfying(versions, descriptor.range);
+        const validRange = semverUtils.validRange(descriptor.range);
+        if (validRange) {
+          const maxSatisfyingVersion = semver.maxSatisfying(versions, validRange);
 
           if (maxSatisfyingVersion !== null) {
             version = maxSatisfyingVersion;
@@ -157,7 +151,7 @@ export default class InfoCommand extends BaseCommand {
          * @see `version` - The latest version that satisfies `descriptor.range` (if it is a valid range), else `fallbackVersion`
          * @see `versions` - All version tags of a package, sorted in ascending order
          */
-        const packageInformation: PackageInformation = {
+        const packageInformation: Partial<PackageInformation> = {
           ...result,
           ...release,
           version,
@@ -169,7 +163,7 @@ export default class InfoCommand extends BaseCommand {
           serialized = {};
 
           for (const field of fields) {
-            // @ts-ignore
+            // @ts-expect-error
             const value = packageInformation[field];
 
             if (typeof value !== `undefined`) {
@@ -199,7 +193,7 @@ export default class InfoCommand extends BaseCommand {
       }
     });
 
-    // @ts-ignore: The Node typings forgot one field
+    // @ts-expect-error: The Node typings forgot one field
     inspect.styles.name = `cyan`;
 
     for (const serialized of infos) {
@@ -220,7 +214,7 @@ export default class InfoCommand extends BaseCommand {
 // Remove hidden properties recursively
 function clean(value: unknown): unknown {
   if (Array.isArray(value)) {
-    const result: unknown[] = [];
+    const result: Array<unknown> = [];
 
     for (let item of value) {
       item = clean(item);

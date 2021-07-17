@@ -2,11 +2,16 @@
 category: features
 path: /features/zero-installs
 title: 'Zero-Installs'
+description: An overview of Yarn's Zero-Installs, a feature provided by PnP which enables storing all dependencies inside the project's repository.
 ---
 
 While not a feature in itself, the term "Zero Install" encompasses a lot of Yarn features tailored around one specific goal - to make your projects as stable and fast as possible by removing the main source of entropy from the equation: Yarn itself.
 
 > **Important:** Zero-install is an *optional* philosophy. It has some drawbacks, and while we believe this workflow to be a defining feature for professional-grade projects we don't have any plans to ignore or deprecate the typical `yarn install` workflow in any way, now or in the future.
+
+```toc
+# This code block gets replaced with the Table of Contents
+```
 
 ## How does Yarn impact a project's stability?
 
@@ -24,9 +29,9 @@ In order to make a project zero-install, you must be able to use it as soon as y
 
   - Again, this whole workflow is optional. If at some point you decide that in the end you prefer to keep using a global cache, just toggle on `enableGlobalCache` in the [yarnrc settings](/configuration/yarnrc#enableGlobalCache) and it'll be back to normal.
 
-- When running `yarn install`, Yarn will generate a `.pnp.js` file. Add it to your repository as well - it contains the dependency tree that Node will use to load your packages.
+- When running `yarn install`, Yarn will generate a `.pnp.cjs` file. Add it to your repository as well - it contains the dependency tree that Node will use to load your packages.
 
-- Depending on whether your dependencies have install scripts or not (we advise you to avoid it if you can and prefer wasm-powered alternatives) you may also want to add the `.yarn/unplugged` and `.yarn/build-state.yml` entries.
+- Depending on whether your dependencies have install scripts or not (we advise you to avoid it if you can and prefer wasm-powered alternatives) you may also want to add the `.yarn/unplugged` entries.
 
 And that's it! Push your changes to your repository, checkout a new one somewhere, and check whether running `yarn start` (or whatever other script you'd normally use) works.
 
@@ -36,7 +41,7 @@ And that's it! Push your changes to your repository, checkout a new one somewher
 
 Yes, very much. To give you an idea, a `node_modules` folder of 135k uncompressed files (for a total of 1.2GB) gives a Yarn cache of 2k binary archives (for a total of 139MB). Git simply cannot support the former, while the latter is perfectly fine.
 
-Another huge difference is the number of changes. Back in Yarn 1, when updating a package, a huge amount of files had to be recreated, or even simply moved. When the same happens in a Yarn 2 install, you get a very predictable result: exactly one changed file for each added/removed package. This in turn has beneficial side effects in term of performance and security, since you can easily spot the invalid checksums on a per-package basis.
+Another huge difference is the number of changes. Back in Yarn 1, when updating a package, a huge amount of files had to be recreated, or even simply moved. When the same happens in a Yarn 2 install, you get a very predictable result: exactly one changed file for each added/removed package. This in turn has beneficial side effects in terms of performance and security, since you can easily spot the invalid checksums on a per-package basis.
 
 ### Does it have security implications?
 

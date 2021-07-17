@@ -2,6 +2,7 @@
 category: advanced
 path: /advanced/error-codes
 title: "Error Codes"
+description: A list of Yarn's error codes with detailed explanations.
 ---
 
 <!-- Never remove the entries in this file, as we want to support older releases -->
@@ -9,6 +10,10 @@ title: "Error Codes"
 > *Are you a plugin author and want to declare your own error codes that don't match the semantic of the ones provided here? Please relinquish one character and use the `YNX` prefix (ex `YNX001`) instead of `YN0`!*
 >
 > *Keeping this convention will help our users to figure out which error codes can be found on this documentation and which ones should instead be checked against the individual documentation of the plugins they use.*
+
+```toc
+className: toc toc-no-item
+```
 
 ## YN0000 - `UNNAMED`
 
@@ -22,19 +27,44 @@ This error typically should never happen (it should instead point to a different
 
 ## YN0002 - `MISSING_PEER_DEPENDENCY`
 
-A package requests a peer dependency, but its parent in the dependency tree doesn't provide it.
+A package requests a peer dependency, but one or more of its parents in the dependency tree doesn't provide it.
 
-This error occurs when a package peer dependencies cannot be satisfied. If the peer dependency is optional and shouldn't trigger such warnings, then mark it as such using the [optional peer dependencies]() feature.
+Note that Yarn enforces peer dependencies at every level of the dependency tree. That is, if `─D>` is a dependency and `─P>` is a peer dependency,
 
-Note that Yarn enforces peer dependencies at every level of the dependency tree - meaning that if `A` depends on `B+X`, and `B` depends on `C`, and `C` has a peer dependency on `X`, then a warning will be emitted (because `B` doesn't fulfill the peer dependency request). The best way to solve this is to explicitly list the transitive peer dependency on `X` in `B` has well.
+```sh
+# bad
+project
+├─D> packagePeer
+└─D> packageA
+     └─P> packageB
+          └─P> packagePeer
+
+# good
+project
+├─D> packagePeer
+└─D> packageA
+     ├─P> packagePeer
+     └─D> packageB
+          └─P> packagePeer
+```
+
+Depending on your situation, multiple options are possible:
+
+* The author of `packageA` can fix this problem by adding a peer dependency on `packagePeer`. If relevant, they can use [optional peer dependencies](https://yarnpkg.com/configuration/manifest#peerDependenciesMeta.optional) to this effect.
+
+* The author of `packageB` can fix this problem by marking the `packagePeer` peer dependency as optional - but only if the peer dependency is actually optional, of course!
+
+* The author of `project` can fix this problem by manually overriding the `packageA` and/or `packageB` definitions via the [`packageExtensions` config option](/configuration/yarnrc#packageExtensions).
+
+To understand more about this issue, check out [this blog post](https://dev.to/arcanis/implicit-transitive-peer-dependencies-ed0).
 
 ## YN0003 - `CYCLIC_DEPENDENCIES`
 
 Two packages with build scripts have cyclic dependencies.
 
-Cyclic dependencies are a can of worm. They happen when a package `A` depends on a package `B` and vice-versa Sometime can arise through a chain of multiple packages - for example when `A` depends on `B`, which depends on `C`, which depends on `A`.
+Cyclic dependencies are a can of worms. They happen when a package `A` depends on a package `B` and vice-versa Sometime can arise through a chain of multiple packages - for example when `A` depends on `B`, which depends on `C`, which depends on `A`.
 
-While cyclic dependencies may work fine in the general Javascript case (and in fact Yarn won't warn you about it in most cases), they can cause issues as soon as build scripts are involved. Indeed, in order to build a package, we first must make sure that its own dependencies have been properly built. How can we do that when two packages reference each other? Since the first one to build cannot be deduced, such patterns will cause the build scripts of every affected packages to simply be ignored (and a warning emitted).
+While cyclic dependencies may work fine in the general Javascript case (and in fact Yarn won't warn you about it in most cases), they can cause issues as soon as build scripts are involved. Indeed, in order to build a package, we first must make sure that its own dependencies have been properly built. How can we do that when two packages reference each other? Since the first one to build cannot be deduced, such patterns will cause the build scripts of every affected package to simply be ignored (and a warning emitted).
 
 There's already good documentation online explaining how to get rid of cyclic dependencies, the simplest one being to extract the shared part of your program into a third package without dependencies. So the first case we described would become `A` depends on `C`, `B` depends on `C`, `C` doesn't depend on anything.
 
@@ -42,9 +72,9 @@ There's already good documentation online explaining how to get rid of cyclic de
 
 A package has build scripts, but they've been disabled across the project.
 
-Build scripts can be disabled on a global basis through the use of the `enable-scripts` settings. When it happens, a warning is still emitted to let you know that the installation might not be complete.
+Build scripts can be disabled on a global basis through the use of the `enableScripts` settings. When it happens, a warning is still emitted to let you know that the installation might not be complete.
 
-The safest way to downgrade the warning into a notification is to explicitly disable build scripts for the affected packages through the use of the `dependenciesMeta[].build` key.
+The safest way to downgrade the warning into a notification is to explicitly disable build scripts for the affected packages through the use of the `dependenciesMeta[].built` key.
 
 ## YN0005 - `BUILD_DISABLED`
 
@@ -72,13 +102,13 @@ There are a few workarounds:
 
 A package must be built.
 
-This informational message occurs when Yarn wishes to let you know that a package will need to be built in order for the installation to complete. This usually occurs in only two cases: either the package never has been built before, or its previous build failed (returned a non-zero exit code).
+This informational message occurs when Yarn wishes to let you know that a package will need to be built for the installation to complete. This usually occurs in only two cases: either the package never has been built before, or its previous build failed (returned a non-zero exit code).
 
 ## YN0008 - `MUST_REBUILD`
 
 A package must be rebuilt.
 
-This information message occurs when Yarn wishes to let you know that a package will need to be rebuilt in order for the installation to complete. This usually occurs in a single case: when the package's dependency tree has changed. Note that this also include its transitive dependencies, which sometimes may cause surprising rebuilds (for example, if `A` depends on `B` that depends on `C@1`, and if Yarn decides for some reason that `C` should be bumped to `C@2`, then `A` will need to be rebuilt).
+This information message occurs when Yarn wishes to let you know that a package will need to be rebuilt in order for the installation to complete. This usually occurs in a single case: when the package's dependency tree has changed. Note that this also includes its transitive dependencies, which sometimes may cause surprising rebuilds (for example, if `A` depends on `B` that depends on `C@1`, and if Yarn decides for some reason that `C` should be bumped to `C@2`, then `A` will need to be rebuilt).
 
 ## YN0009 - `BUILD_FAILED`
 
@@ -206,7 +236,7 @@ When running `yarn add` without adding explicit ranges to the packages to add, Y
 
 Your lockfile would be modified if Yarn was to finish the install.
 
-When passing the `--frozen-lockfile` option to `yarn install`, Yarn will ensure that the lockfile isn't modified in the process and will instead throw an exception if this situation was to happen (for example if a newly added package was missing from the lockfile, or if the current Yarn release required some kind of migration before being able to work with the lockfile).
+When passing the `--immutable` option to `yarn install`, Yarn will ensure that the lockfile isn't modified in the process and will instead throw an exception if this situation was to happen (for example if a newly added package was missing from the lockfile, or if the current Yarn release required some kind of migration before being able to work with the lockfile).
 
 This option is typically meant to be used on your CI and production servers, and fixing this error should simply be a matter of running `yarn install` on your local development environment and submitting a PR containing the updated lockfile.
 
@@ -276,4 +306,35 @@ A package requests a peer dependency, but the range provided is not a valid semv
 
 ## YN0060 - `INCOMPATIBLE_PEER_DEPENDENCY`
 
-A package requests a peer dependency, but its parent in the dependency tree provides a version which does not satisfy the peer dependency's range. The parent should be altered to provide a valid version or the peer dependency range updated. This will not prevent resolution, but may leave the system in an incorrect state.
+A package requests a peer dependency, but its parent in the dependency tree provides a version that does not satisfy the peer dependency's range. The parent should be altered to provide a valid version or the peer dependency range updated. This will not prevent resolution, but may leave the system in an incorrect state.
+
+## YN0061 - `DEPRECATED_PACKAGE`
+
+A package is marked as deprecated by the publisher. Avoid using it, use the alternative provided in the deprecation message instead.
+
+## YN0062 - `INCOMPATIBLE_OS`
+
+A package is incompatible with the operating system, as reported by [`process.platform`](https://nodejs.org/api/process.html#process_process_platform).  Its installation will be skipped.
+
+## YN0063 - `INCOMPATIBLE_CPU`
+
+A package is incompatible with the CPU architecture, as reported by [`process.arch`](https://nodejs.org/api/process.html#process_process_arch).  Its installation will be skipped.
+
+## YN0068 - `UNUSED_PACKAGE_EXTENSION`
+
+A packageExtension is detected by Yarn as being unused, which means that the selector doesn't match any of the installed packages.
+
+## YN0069 - `REDUNDANT_PACKAGE_EXTENSION`
+
+A packageExtension is detected by Yarn as being unneeded, which means that the selected packages have the same behavior with and without the extension.
+
+## YN0071 - `NM_CANT_INSTALL_EXTERNAL_SOFT_LINK`
+
+An external soft link (portal) cannot be installed, because incompatible version of a dependency exists in the parent package. This prevents portal representation for node_modules installs without a need to write files into portal's target directory, which is forbidden for security reasons.
+
+**Workarounds** If the ranges for conflicting dependencies overlap between portal target and portal parent, the workaround is to use `yarn dedupe foo` (where `foo` is the conflicting dependency name) to upgrade the conflicting dependencies to the highest available versions, if `yarn dedupe` is used without arguments, all the dependencies across the project will be upgraded to the highest versions within their ranges in `package.json`. Another alternative is to use `link:` protocol instead of `portal:` and install dependencies inside the target directory explicitly.
+
+## YN0072 - `NM_PRESERVE_SYMLINKS_REQUIRED`
+
+A portal dependency with subdependencies is used in the project. `--preserve-symlinks` Node option must be used
+to start the application in order for portal dependency to find its subdependencies and peer dependencies.

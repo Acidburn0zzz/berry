@@ -1,11 +1,11 @@
-import {BaseCommand}                     from '@yarnpkg/cli';
-import {Configuration, Project}          from '@yarnpkg/core';
-import {PortablePath, npath, ppath, xfs} from '@yarnpkg/fslib';
-import {Command, Usage, UsageError}      from 'clipanion';
+import {BaseCommand}                        from '@yarnpkg/cli';
+import {Configuration, Project}             from '@yarnpkg/core';
+import {PortablePath, npath, ppath, xfs}    from '@yarnpkg/fslib';
+import {Command, Option, Usage, UsageError} from 'clipanion';
 
-import {Driver as GitDriver}             from '../drivers/GitDriver';
-import {Driver as MercurialDriver}       from '../drivers/MercurialDriver';
-import {Hooks}                           from '..';
+import {Driver as GitDriver}                from '../drivers/GitDriver';
+import {Driver as MercurialDriver}          from '../drivers/MercurialDriver';
+import {Hooks}                              from '..';
 
 const ALL_DRIVERS = [
   GitDriver,
@@ -14,17 +14,9 @@ const ALL_DRIVERS = [
 
 // eslint-disable-next-line arca/no-default-export
 export default class StageCommand extends BaseCommand {
-  @Command.Boolean(`-c,--commit`)
-  commit: boolean = false;
-
-  @Command.Boolean(`-r,--reset`)
-  reset: boolean = false;
-
-  @Command.Boolean(`-u,--update`)
-  update: boolean = false;
-
-  @Command.Boolean(`-n,--dry-run`)
-  dryRun: boolean = false;
+  static paths = [
+    [`stage`],
+  ];
 
   static usage: Usage = Command.Usage({
     description: `add all yarn files to your vcs`,
@@ -44,15 +36,31 @@ export default class StageCommand extends BaseCommand {
     ]],
   });
 
-  @Command.Path(`stage`)
+  commit = Option.Boolean(`-c,--commit`, false, {
+    description: `Commit the staged files`,
+  });
+
+  reset = Option.Boolean(`-r,--reset`, false, {
+    description: `Remove all files from the staging area`,
+  });
+
+  dryRun = Option.Boolean(`-n,--dry-run`, false, {
+    description: `Print the commit message and the list of modified files without staging / committing`,
+  });
+
+  // TODO: implement it. Its purpose is, quoting @arcanis:
+  // "iirc I intended it to update (amend) the current
+  // commit if it exists, or to create a new one otherwise"
+  // TODO: unhide it and add a description once implemented
+  update = Option.Boolean(`-u,--update`, false, {hidden: true});
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project} = await Project.find(configuration, this.context.cwd);
 
-    let {driver, root} = await findDriver(project.cwd);
+    const {driver, root} = await findDriver(project.cwd);
 
     const basePaths: Array<PortablePath | null> = [
-      configuration.get(`bstatePath`),
       configuration.get(`cacheFolder`),
       configuration.get(`globalFolder`),
       configuration.get(`virtualFolder`),
@@ -91,12 +99,20 @@ export default class StageCommand extends BaseCommand {
         }
       }
     } else {
-      if (changeList.length === 0) {
+      if (this.reset) {
+        const stagedChangeList = await driver.filterChanges(root, yarnPaths, yarnNames, {staged: true});
+        if (stagedChangeList.length === 0) {
+          this.context.stdout.write(`No staged changes found!`);
+        } else {
+          await driver.makeReset(root, stagedChangeList);
+        }
+      } else if (changeList.length === 0) {
         this.context.stdout.write(`No changes found!`);
       } else if (this.commit) {
         await driver.makeCommit(root, changeList, commitMessage);
-      } else if (this.reset) {
-        await driver.makeReset(root, changeList);
+      } else {
+        await driver.makeStage(root, changeList);
+        this.context.stdout.write(commitMessage);
       }
     }
   }

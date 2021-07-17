@@ -14,6 +14,8 @@ export async function getLibzipPromise() {
       });
     });
   }
+
+  return promise;
 }
 
-export {Libzip} from './makeInterface';
+export type {Libzip} from './makeInterface';

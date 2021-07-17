@@ -1,9 +1,11 @@
 {
   "name": "@yarnpkg/json-proxy",
-  "version": "2.0.0-rc.7",
+  "version": "2.1.1-rc.7",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "dependencies": {
-    "@yarnpkg/fslib": "workspace:^2.0.0-rc.16"
+    "@yarnpkg/fslib": "workspace:^2.5.0-rc.9",
+    "tslib": "^1.13.0"
   },
   "scripts": {
     "postpack": "rm -rf lib",
@@ -19,6 +21,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
-  }
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-json-proxy"
+  },
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.1.0"
 }

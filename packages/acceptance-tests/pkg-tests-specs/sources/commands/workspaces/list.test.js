@@ -1,7 +1,7 @@
 const {
   fs: {writeJson},
   misc: {parseJsonStream},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 describe(`Commands`, () => {
   describe(`workspace list -v,--verbose --json`, () => {
@@ -31,7 +31,7 @@ describe(`Commands`, () => {
               location: `.`,
               name: null,
               workspaceDependencies: [],
-              mismatchedWorkspaceDependencies:[],
+              mismatchedWorkspaceDependencies: [],
             },
             [`packages/workspace-a`]: {
               location: `packages/workspace-a`,
@@ -82,7 +82,7 @@ describe(`Commands`, () => {
               location: `.`,
               name: null,
               workspaceDependencies: [],
-              mismatchedWorkspaceDependencies:[],
+              mismatchedWorkspaceDependencies: [],
             },
             [`packages/workspace-a`]: {
               location: `packages/workspace-a`,
@@ -130,7 +130,7 @@ describe(`Commands`, () => {
               location: `.`,
               name: null,
               workspaceDependencies: [],
-              mismatchedWorkspaceDependencies:[],
+              mismatchedWorkspaceDependencies: [],
             },
             [`packages/workspace-a`]: {
               location: `packages/workspace-a`,

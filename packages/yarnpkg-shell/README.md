@@ -5,9 +5,9 @@ A JavaScript implementation of a bash-like shell (we use it in Yarn 2 to provide
 ## Usage
 
 ```ts
-import {execute} from '@berry/shell';
+import {execute} from '@yarnpkg/shell';
 
-process.exitCode = await execute(`ls "$1" | wc -l`, [process.cwd()]);
+process.exitCode = await execute(`ls "$0" | wc -l`, [process.cwd()]);
 ```
 
 ## Features
@@ -16,17 +16,19 @@ process.exitCode = await execute(`ls "$1" | wc -l`, [process.cwd()]);
 - Portable across systems
 - Supports custom JS builtins
 - Supports pipes
+- Supports glob patterns (**only** for files that exist on the filesystem: `ls *.txt`)
 - Supports logical operators
 - Supports subshells
 - Supports variables
 - Supports string manipulators
 - Supports argc/argv
+- Supports background jobs with color-coded output
 - Supports the most classic builtins
 - Doesn't necessarily need to access the fs
 
 ## Help Wanted
 
-- Glob support (`ls *.txt`)
+- Full glob support (`mv build/{index.js,index.build.js}`, `echo {foo,bar}`, `FOO=a,b echo {$FOO,x}`)
 - More string manipulators
 
 ## Non-Goals

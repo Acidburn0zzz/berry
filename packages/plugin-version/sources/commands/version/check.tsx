@@ -1,12 +1,13 @@
 import {WorkspaceRequiredError}                                                                                 from '@yarnpkg/cli';
-import {CommandContext, Configuration, MessageName, Project, StreamReport, Workspace, structUtils, ThrowReport} from '@yarnpkg/core';
-import {ppath}                                                                                                  from '@yarnpkg/fslib';
+import {CommandContext, Configuration, MessageName, Project, StreamReport, Workspace, formatUtils, structUtils} from '@yarnpkg/core';
+import {npath}                                                                                                  from '@yarnpkg/fslib';
+import {Gem}                                                                                                    from '@yarnpkg/libui/sources/components/Gem';
 import {ScrollableItems}                                                                                        from '@yarnpkg/libui/sources/components/ScrollableItems';
 import {FocusRequest}                                                                                           from '@yarnpkg/libui/sources/hooks/useFocusRequest';
 import {useListInput}                                                                                           from '@yarnpkg/libui/sources/hooks/useListInput';
 import {renderForm}                                                                                             from '@yarnpkg/libui/sources/misc/renderForm';
-import {Command, Usage, UsageError}                                                                             from 'clipanion';
-import {Box, Color}                                                                                             from 'ink';
+import {Command, Option, Usage, UsageError}                                                                     from 'clipanion';
+import {Box, Text}                                                                                              from 'ink';
 import React, {useCallback, useState}                                                                           from 'react';
 import semver                                                                                                   from 'semver';
 
@@ -15,9 +16,10 @@ import * as versionUtils                                                        
 type Releases = Map<Workspace, Exclude<versionUtils.Decision, versionUtils.Decision.UNDECIDED>>;
 
 // eslint-disable-next-line arca/no-default-export
-export default class VersionApplyCommand extends Command<CommandContext> {
-  @Command.Boolean(`-i,--interactive`)
-  interactive?: boolean;
+export default class VersionCheckCommand extends Command<CommandContext> {
+  static paths = [
+    [`version`, `check`],
+  ];
 
   static usage: Usage = Command.Usage({
     category: `Release-related commands`,
@@ -37,7 +39,10 @@ export default class VersionApplyCommand extends Command<CommandContext> {
     ]],
   });
 
-  @Command.Path(`version`, `check`)
+  interactive = Option.Boolean(`-i,--interactive`, {
+    description: `Open an interactive interface used to set version bumps`,
+  });
+
   async execute() {
     if (this.interactive) {
       return await this.executeInteractive();
@@ -53,26 +58,61 @@ export default class VersionApplyCommand extends Command<CommandContext> {
     if (!workspace)
       throw new WorkspaceRequiredError(project.cwd, this.context.cwd);
 
-    await project.resolveEverything({
-      lockfileOnly: true,
-      report: new ThrowReport(),
-    });
+    await project.restoreInstallState();
 
     const versionFile = await versionUtils.openVersionFile(project);
     if (versionFile === null || versionFile.releaseRoots.size === 0)
-      return;
+      return 0;
 
     if (versionFile.root === null)
       throw new UsageError(`This command can only be run on Git repositories`);
 
+    const Prompt = () => {
+      return (
+        <Box flexDirection="row" paddingBottom={1}>
+          <Box flexDirection="column" width={60}>
+            <Box>
+              <Text>
+                Press <Text bold color="cyanBright">{`<up>`}</Text>/<Text bold color="cyanBright">{`<down>`}</Text> to select workspaces.
+              </Text>
+            </Box>
+            <Box>
+              <Text>
+                 Press <Text bold color="cyanBright">{`<left>`}</Text>/<Text bold color="cyanBright">{`<right>`}</Text> to select release strategies.
+              </Text>
+            </Box>
+          </Box>
+          <Box flexDirection="column">
+            <Box marginLeft={1}>
+              <Text>
+                Press <Text bold color="cyanBright">{`<enter>`}</Text> to save.
+              </Text>
+            </Box>
+            <Box marginLeft={1}>
+              <Text>
+                Press <Text bold color="cyanBright">{`<ctrl+c>`}</Text> to abort.
+              </Text>
+            </Box>
+          </Box>
+        </Box>
+      );
+    };
+
     const Undecided = ({workspace, active, decision, setDecision}: {workspace: Workspace, active?: boolean, decision: versionUtils.Decision, setDecision: (decision: versionUtils.Decision) => void}) => {
-      const currentVersion = workspace.manifest.version;
+      const currentVersion = workspace.manifest.raw.stableVersion ?? workspace.manifest.version;
       if (currentVersion === null)
         throw new Error(`Assertion failed: The version should have been set (${structUtils.prettyLocator(configuration, workspace.anchoredLocator)})`);
 
-      const strategies: Array<versionUtils.Decision> = semver.prerelease(currentVersion) === null
-        ? [versionUtils.Decision.UNDECIDED, versionUtils.Decision.DECLINE, versionUtils.Decision.PATCH, versionUtils.Decision.MINOR, versionUtils.Decision.MAJOR, versionUtils.Decision.PRERELEASE]
-        : [versionUtils.Decision.UNDECIDED, versionUtils.Decision.DECLINE, versionUtils.Decision.PRERELEASE, versionUtils.Decision.MAJOR];
+      if (semver.prerelease(currentVersion) !== null)
+        throw new Error(`Assertion failed: Prerelease identifiers shouldn't be found (${currentVersion})`);
+
+      const strategies: Array<versionUtils.Decision> = [
+        versionUtils.Decision.UNDECIDED,
+        versionUtils.Decision.DECLINE,
+        versionUtils.Decision.PATCH,
+        versionUtils.Decision.MINOR,
+        versionUtils.Decision.MAJOR,
+      ];
 
       useListInput(decision, strategies, {
         active: active!,
@@ -82,25 +122,32 @@ export default class VersionApplyCommand extends Command<CommandContext> {
       });
 
       const nextVersion = decision === versionUtils.Decision.UNDECIDED
-        ? <Color yellow>{currentVersion}</Color>
+        ? <Text color="yellow">{currentVersion}</Text>
         : decision === versionUtils.Decision.DECLINE
-          ? <Color green>{currentVersion}</Color>
-          : <><Color magenta>{currentVersion}</Color> → <Color green>{semver.inc(currentVersion, decision)}</Color></>;
+          ? <Text color="green">{currentVersion}</Text>
+          : <Text><Text color="magenta">{currentVersion}</Text> → <Text color="green">{semver.inc(currentVersion, decision)}</Text></Text>;
 
-      return <Box flexDirection={`column`}>
-        <Box>
-          {structUtils.prettyLocator(configuration, workspace.anchoredLocator)} - {nextVersion}
+      return (
+        <Box flexDirection={`column`}>
+          <Box>
+            <Text>
+              {structUtils.prettyLocator(configuration, workspace.anchoredLocator)} - {nextVersion}
+            </Text>
+          </Box>
+          <Box>
+            {strategies.map(strategy => {
+              const isGemActive = strategy === decision;
+              return (
+                <Box key={strategy} paddingLeft={2}>
+                  <Text>
+                    <Gem active={isGemActive} /> {strategy}
+                  </Text>
+                </Box>
+              );
+            })}
+          </Box>
         </Box>
-        <Box>
-          {strategies.map(strategy => {
-            if (strategy === decision) {
-              return <Box key={strategy} paddingLeft={2}><Color green>◼</Color> {strategy}</Box>;
-            } else {
-              return <Box key={strategy} paddingLeft={2}><Color yellow>◻</Color> {strategy}</Box>;
-            }
-          })}
-        </Box>
-      </Box>;
+      );
     };
 
     const getRelevancy = (releases: Releases) => {
@@ -151,7 +198,7 @@ export default class VersionApplyCommand extends Command<CommandContext> {
     };
 
     const useReleases = (): [Releases, (workspace: Workspace, decision: versionUtils.Decision) => void] => {
-      const [releases, setReleases] = useState<Releases>(versionFile.releases);
+      const [releases, setReleases] = useState<Releases>(() => new Map(versionFile.releases));
 
       const setWorkspaceRelease = useCallback((workspace: Workspace, decision: versionUtils.Decision) => {
         const copy = new Map(releases);
@@ -187,7 +234,7 @@ export default class VersionApplyCommand extends Command<CommandContext> {
       parts.push(`${releaseCount} release${releaseCount === 1 ? `` : `s`}`);
       parts.push(`${remainingCount} remaining`);
 
-      return <Color yellow>{parts.join(`, `)}</Color>;
+      return <Text color="yellow">{parts.join(`, `)}</Text>;
     };
 
     const App = ({useSubmit}: {useSubmit: (value: Releases) => void}) => {
@@ -212,46 +259,68 @@ export default class VersionApplyCommand extends Command<CommandContext> {
         }
       }, [focus, setFocus]);
 
-      return <Box width={80} flexDirection={`column`}>
-        <Box textWrap={`wrap`}>
-          The following files have been modified in your local checkout.
+      return (
+        <Box flexDirection={`column`}>
+          <Prompt />
+          <Box>
+            <Text wrap="wrap">
+              The following files have been modified in your local checkout.
+            </Text>
+          </Box>
+          <Box flexDirection={`column`} marginTop={1} paddingLeft={2}>
+            {[...versionFile.changedFiles].map(file => (
+              <Box key={file}>
+                <Text>
+                  <Text color="grey">{npath.fromPortablePath(versionFile.root)}</Text>{npath.sep}{npath.relative(npath.fromPortablePath(versionFile.root), npath.fromPortablePath(file))}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+          {versionFile.releaseRoots.size > 0 && <>
+            <Box marginTop={1}>
+              <Text wrap="wrap">
+                Because of those files having been modified, the following workspaces may need to be released again (note that private workspaces are also shown here, because even though they won't be published, releasing them will allow us to flag their dependents for potential re-release):
+              </Text>
+            </Box>
+            {dependentWorkspaces.size > 3 ? <Box marginTop={1}>
+              <Stats workspaces={versionFile.releaseRoots} releases={releases} />
+            </Box> : null}
+            <Box marginTop={1} flexDirection={`column`}>
+              <ScrollableItems active={focus % 2 === 0} radius={1} size={2} onFocusRequest={handleFocusRequest}>
+                {[...versionFile.releaseRoots].map(workspace => (
+                  <Undecided key={workspace.cwd} workspace={workspace} decision={releases.get(workspace) || versionUtils.Decision.UNDECIDED} setDecision={decision => setWorkspaceRelease(workspace, decision)} />
+                ))}
+              </ScrollableItems>
+            </Box>
+          </>}
+          {dependentWorkspaces.size > 0 ? (
+            <>
+              <Box marginTop={1}>
+                <Text wrap="wrap">
+                  The following workspaces depend on other workspaces that have been marked for release, and thus may need to be released as well:
+                </Text>
+              </Box>
+              <Box>
+                <Text>
+                  (Press <Text bold color="cyanBright">{`<tab>`}</Text> to move the focus between the workspace groups.)
+                </Text>
+              </Box>
+              {dependentWorkspaces.size > 5 ? (
+                <Box marginTop={1}>
+                  <Stats workspaces={dependentWorkspaces} releases={releases} />
+                </Box>
+              ) : null}
+              <Box marginTop={1} flexDirection={`column`}>
+                <ScrollableItems active={focus % 2 === 1} radius={2} size={2} onFocusRequest={handleFocusRequest}>
+                  {[...dependentWorkspaces].map(workspace => (
+                    <Undecided key={workspace.cwd} workspace={workspace} decision={releases.get(workspace) || versionUtils.Decision.UNDECIDED} setDecision={decision => setWorkspaceRelease(workspace, decision)} />
+                  ))}
+                </ScrollableItems>
+              </Box>
+            </>
+          ) : null}
         </Box>
-        <Box flexDirection={`column`} marginTop={1} paddingLeft={2}>
-          {[...versionFile.changedFiles].map(file => <Box key={file}>
-            <Color grey>{versionFile.root}</Color>/{ppath.relative(versionFile.root, file)}
-          </Box>)}
-        </Box>
-        {versionFile.releaseRoots.size > 0 && <>
-          <Box marginTop={1} textWrap={`wrap`}>
-            Because of those files having been modified, the following workspaces may need to be released again (note that private workspaces are also shown here, because even though they won't be published, releasing them will allow us to flag their dependents for potential re-release):
-          </Box>
-          {dependentWorkspaces.size > 3 ? <Box marginTop={1}>
-            <Stats workspaces={versionFile.releaseRoots} releases={releases} />
-          </Box> : null}
-          <Box marginTop={1} flexDirection={`column`}>
-            <ScrollableItems active={focus % 2 === 0} radius={1} size={2} onFocusRequest={handleFocusRequest}>
-              {[...versionFile.releaseRoots].map(workspace => {
-                return <Undecided key={workspace.cwd} workspace={workspace} decision={releases.get(workspace) || versionUtils.Decision.UNDECIDED} setDecision={decision => setWorkspaceRelease(workspace, decision)} />;
-              })}
-            </ScrollableItems>
-          </Box>
-        </>}
-        {dependentWorkspaces.size > 0 && <>
-          <Box marginTop={1} textWrap={`wrap`}>
-            The following workspaces depend on other workspaces that have been marked for release, and thus may need to be released as well:
-          </Box>
-          {dependentWorkspaces.size > 5 ? <Box marginTop={1}>
-            <Stats workspaces={dependentWorkspaces} releases={releases} />
-          </Box> : null}
-          <Box marginTop={1} flexDirection={`column`}>
-            <ScrollableItems active={focus % 2 === 1} radius={2} size={2} onFocusRequest={handleFocusRequest}>
-              {[...dependentWorkspaces].map(workspace => {
-                return <Undecided key={workspace.cwd} workspace={workspace} decision={releases.get(workspace) || versionUtils.Decision.UNDECIDED} setDecision={decision => setWorkspaceRelease(workspace, decision)} />;
-              })}
-            </ScrollableItems>
-          </Box>
-        </>}
-      </Box>;
+      );
     };
 
     const decisions = await renderForm<Releases>(App, {versionFile});
@@ -264,6 +333,8 @@ export default class VersionApplyCommand extends Command<CommandContext> {
       versionFile.releases.set(workspace, decision);
 
     await versionFile.saveAll();
+
+    return undefined;
   }
 
   async executeStandard() {
@@ -273,10 +344,7 @@ export default class VersionApplyCommand extends Command<CommandContext> {
     if (!workspace)
       throw new WorkspaceRequiredError(project.cwd, this.context.cwd);
 
-    await project.resolveEverything({
-      lockfileOnly: true,
-      report: new ThrowReport(),
-    });
+    await project.restoreInstallState();
 
     const report = await StreamReport.start({
       configuration,
@@ -289,14 +357,14 @@ export default class VersionApplyCommand extends Command<CommandContext> {
       if (versionFile.root === null)
         throw new UsageError(`This command can only be run on Git repositories`);
 
-      report.reportInfo(MessageName.UNNAMED, `Your PR was started right after ${configuration.format(versionFile.baseHash.slice(0, 7), `yellow`)} ${configuration.format(versionFile.baseTitle, `magenta`)}`);
+      report.reportInfo(MessageName.UNNAMED, `Your PR was started right after ${formatUtils.pretty(configuration, versionFile.baseHash.slice(0, 7), `yellow`)} ${formatUtils.pretty(configuration, versionFile.baseTitle, `magenta`)}`);
 
       if (versionFile.changedFiles.size > 0) {
         report.reportInfo(MessageName.UNNAMED, `You have changed the following files since then:`);
         report.reportSeparator();
 
         for (const file of versionFile.changedFiles) {
-          report.reportInfo(null, `${configuration.format(versionFile.root, `gray`)}/${ppath.relative(versionFile.root, file)}`);
+          report.reportInfo(null, `${formatUtils.pretty(configuration, npath.fromPortablePath(versionFile.root), `gray`)}${npath.sep}${npath.relative(npath.fromPortablePath(versionFile.root), npath.fromPortablePath(file))}`);
         }
       }
 

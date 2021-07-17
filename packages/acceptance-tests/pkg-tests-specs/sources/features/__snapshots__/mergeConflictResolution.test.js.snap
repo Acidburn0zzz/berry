@@ -6,6 +6,7 @@ exports[`Features Merge Conflict Resolution it should properly fix merge conflic
 
 __metadata:
   version: 4
+  cacheKey: 0
 
 \\"no-deps@npm:*\\":
 <<<<<<< HEAD
@@ -35,10 +36,11 @@ Object {
   "code": 0,
   "stderr": "",
   "stdout": "➤ YN0048: Automatically fixed merge conflicts 👍
+
 ➤ YN0000: ┌ Resolution step
 ➤ YN0000: └ Completed
 ➤ YN0000: ┌ Fetch step
-➤ YN0019: │ no-deps-npm-1.0.0-cf533b267a-2.zip appears to be unused - removing
+➤ YN0019: │ no-deps-npm-1.0.0-cf533b267a-a33284e534.zip appears to be unused - removing
 ➤ YN0000: └ Completed
 ➤ YN0000: ┌ Link step
 ➤ YN0000: └ Completed
@@ -53,6 +55,7 @@ exports[`Features Merge Conflict Resolution it should properly fix merge conflic
 
 __metadata:
   version: 4
+  cacheKey: 0
 
 <<<<<<< HEAD
 no-deps@*:
@@ -72,7 +75,7 @@ no-deps@*:
   resolution: \\"root-workspace-0b6124@workspace:.\\"
   dependencies:
     no-deps: \\"*\\"
-  languageName: unknown
+  languageName: node
   linkType: soft
 >>>>>>> yarn2
 "
@@ -83,6 +86,7 @@ Object {
   "code": 0,
   "stderr": "",
   "stdout": "➤ YN0048: Automatically fixed merge conflicts 👍
+
 ➤ YN0000: ┌ Resolution step
 ➤ YN0000: └ Completed
 ➤ YN0000: ┌ Fetch step

@@ -8,15 +8,21 @@
 
 export type ArgumentSegment =
   | {type: `text`, text: string}
+  | {type: `glob`, pattern: string}
   | {type: `shell`, shell: ShellLine, quoted: boolean}
-  | {type: `variable`, name: string, defaultValue?: Array<ValueArgument>, quoted: boolean};
+  | {type: `variable`, name: string, defaultValue?: Array<ValueArgument>, quoted: boolean}
+  | {type: `arithmetic`, arithmetic: ArithmeticExpression};
 
 export type Argument =
   | RedirectArgument
   | ValueArgument;
 
-export type RedirectArgument =
-  | {type: `redirection`, subtype: `>` | `<` | `>>` | `<<<`, args: Array<ValueArgument>};
+export type RedirectArgument = {
+  type: `redirection`,
+  subtype: `>` | `<` | '>&' | '<&' | `>>` | `<<<`,
+  fd: number | null,
+  args: Array<ValueArgument>
+};
 
 export type ValueArgument =
   | {type: `argument`, segments: Array<ArgumentSegment>};
@@ -35,6 +41,10 @@ export type Command = {
   subshell: ShellLine,
   args: Array<RedirectArgument>,
 } | {
+  type: `group`,
+  group: ShellLine,
+  args: Array<RedirectArgument>,
+} | {
   type: `envs`,
   envs: Array<EnvSegment>
 };
@@ -44,7 +54,7 @@ export type CommandChain = Command & {
 };
 
 export type CommandChainThen = {
-  type: '|&' | '|',
+  type: `|&` | `|`,
   chain: CommandChain,
 };
 
@@ -54,10 +64,29 @@ export type CommandLine = {
 };
 
 export type CommandLineThen = {
-  type: '&&' | '||',
+  type: `&&` | `||`,
   line: CommandLine,
 };
 
-export type ShellLine = Array<CommandLine>;
+export type ShellLine = Array<{
+  type: ';' | '&',
+  command: CommandLine,
+}>;
 
-export declare const parse: (code: string) => ShellLine;
+export type ArithmeticPrimary = {
+  type: `number`,
+  value: number,
+} | {
+  type: `variable`,
+  name: string,
+};
+
+export type ArithmeticOperatorExpression = {
+  type: `multiplication` | `division` | `addition` | `subtraction`;
+  left: ArithmeticExpression,
+  right: ArithmeticExpression,
+};
+
+export type ArithmeticExpression = ArithmeticPrimary | ArithmeticOperatorExpression;
+
+export declare const parse: (code: string, options: {isGlobPattern: (arg: string) => boolean}) => ShellLine;

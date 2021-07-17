@@ -1,11 +1,12 @@
 {
   "name": "@yarnpkg/fslib",
-  "version": "2.0.0-rc.16",
+  "version": "2.5.0-rc.9",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "sideEffects": false,
   "dependencies": {
-    "@yarnpkg/libzip": "workspace:^2.0.0-rc.10",
-    "tmp": "^0.1.0"
+    "@yarnpkg/libzip": "workspace:^2.2.2-rc.7",
+    "tslib": "^1.13.0"
   },
   "scripts": {
     "postpack": "rm -rf lib",
@@ -23,6 +24,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
-  }
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-fslib"
+  },
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.4.0"
 }

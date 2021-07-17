@@ -2,7 +2,12 @@
 category: advanced
 path: /advanced/pnpapi
 title: "PnP API"
+description: In-depth documentation of the PnP API.
 ---
+
+```toc
+# This code block gets replaced with the Table of Contents
+```
 
 ## Overview
 
@@ -21,7 +26,7 @@ export type PackageLocator = {
 
 A package locator is an object describing one unique instance of a package in the dependency tree. The `name` field is guaranteed to be the name of the package itself, but the `reference` field should be considered an opaque string whose value may be whatever the PnP implementation decides to put there.
 
-Note that one package locator is different from the others: the top-level locator (available through `pnp.topLevel`, cf below) sets *both* `name` and `reference` to `null`. This special locator will always point to the project folder (which is generally the root of the repository, even when working with workspaces).
+Note that one package locator is different from the others: the top-level locator (available through `pnp.topLevel`, cf below) sets *both* `name` and `reference` to `null`. This special locator will always mirror the top-level package (which is generally the root of the repository, even when working with workspaces).
 
 ### `PackageInformation`
 
@@ -44,7 +49,7 @@ The package information set describes the location where the package can be foun
 
 The `packagePeers` field, if present, indicates which dependencies have an enforced contract on using the exact same instance as the package that depends on them. This field is rarely useful in pure PnP context (because our instantiation guarantees are stricter and more predictable than this), but is required to properly generate a `node_modules` directory from a PnP map.
 
-The `linkType` field is only useful in specific cases - it describes whether the producer of the PnP API was asked to make the package available through an hard linkage (in which case all the `packageLocation` field is reputed being owned by the linker) or a soft linkage (in which case the `packageLocation` field represents a location outside of the sphere of influence of the linker).
+The `linkType` field is only useful in specific cases - it describes whether the producer of the PnP API was asked to make the package available through a hard linkage (in which case all the `packageLocation` field is reputed being owned by the linker) or a soft linkage (in which case the `packageLocation` field represents a location outside of the sphere of influence of the linker).
 
 ## Runtime Constants
 
@@ -70,7 +75,7 @@ The `module` builtin module is extended when operating within the PnP API with o
 export function findPnpApi(lookupSource: URL | string): PnpApi | null;
 ```
 
-When called, this function will traverse the filesystem hierarchy starting from the given `lookupSource` in order to locate the closest `.pnp.js` file. It'll then load this file, register it inside the PnP loader internal store, and return the resulting API to you.
+When called, this function will traverse the filesystem hierarchy starting from the given `lookupSource` in order to locate the closest `.pnp.cjs` file. It'll then load this file, register it inside the PnP loader internal store, and return the resulting API to you.
 
 Note that while you'll be able to resolve the dependencies by using the API returned to you, you'll need to make sure they are properly *loaded* on behalf of the project too, by using `createRequire`:
 
@@ -117,7 +122,7 @@ Note that the `pnpapi` builtin is *contextual*: while two packages from the same
 export const VERSIONS: {std: number, [key: string]: number};
 ```
 
-The `VERSIONS` object contains a set of numbers that detail which version of the API is currently exposed. The only version that is guaranteed to be there is `std`, which will refer to the version of this document. Other keys are meant to be used to describe extensions provided by third-party implementors.
+The `VERSIONS` object contains a set of numbers that detail which version of the API is currently exposed. The only version that is guaranteed to be there is `std`, which will refer to the version of this document. Other keys are meant to be used to describe extensions provided by third-party implementors. Versions will only be bumped when the signatures of the public API change.
 
 **Note:** The current version is 3. We bump it responsibly and strive to make each version backward-compatible with the previous ones, but as you can probably guess some features are only available with the latest versions.
 
@@ -130,6 +135,8 @@ export const topLevel: {name: null, reference: null};
 The `topLevel` object is a simple package locator pointing to the top-level package of the dependency tree. Note that even when using workspaces you'll still only have one single top-level for the entire project.
 
 This object is provided for convenience and doesn't necessarily needs to be used; you may create your own top-level locator by using your own locator literal with both fields set to `null`.
+
+**Note:** These special top-level locators are merely aliases to physical locators, which can be accessed by calling `findPackageLocator`.
 
 ### `getLocator(...)`
 
@@ -149,7 +156,17 @@ export function getDependencyTreeRoots(): PackageLocator[];
 
 The `getDependencyTreeRoots` function will return the set of locators that constitute the roots of individual dependency trees. In Yarn, there is exactly one such locator for each workspace in the project.
 
-**Note:** The top-level locator (referenced by the `topLevel` field above) isn't required to be stored in this array as long as it is replaced by another locator that points to the exact same information.
+**Note:** This function will always return the physical locators, so it'll never return the special top-level locator described in the `topLevel` section.
+
+### `getAllLocators(...)`
+
+```ts
+export function getAllLocators(): PackageLocator[];
+```
+
+**Important:** This function is not part of the Plug'n'Play specification and only available as a Yarn extension. In order to use it, you first must check that the [`VERSIONS`](/advanced/pnpapi#versions) dictionary contains a valid `getAllLocators` property.
+
+The `getAllLocators` function will return all locators from the dependency tree, in no particular order (although it'll always be a consistent order between calls for the same API). It can be used when you wish to know more about the packages themselves, but not about the exact tree layout.
 
 ### `getPackageInformation(...)`
 
@@ -166,6 +183,13 @@ export function findPackageLocator(location: string): PackageLocator | null;
 ```
 
 Given a location on the disk, the `findPackageLocator` function will return the package locator for the package that "owns" the path. For example, running this function on something conceptually similar to `/path/to/node_modules/foo/index.js` would return a package locator pointing to the `foo` package (and its exact version).
+
+**Note:** This function will always return the physical locators, so it'll never return the special top-level locator described in the `topLevel` section. You can leverage this property to extract the physical locator for the top-level package:
+
+```ts
+const virtualLocator = pnpApi.topLevel;
+const physicalLocator = pnpApi.findPackageLocator(pnpApi.getPackageInformation(virtualLocator).packageLocation);
+```
 
 ### `resolveToUnqualified(...)`
 
@@ -266,20 +290,23 @@ The paths returned in the `PackageInformation` structures are in the native form
 To access such files, you can use the `@yarnpkg/fslib` project which abstracts the filesystem under a multi-layer architecture. For example, the following code would make it possible to access any path, regardless of whether they're stored within a zip archive or not:
 
 ```ts
-import {PosixFS, ZipOpenFS} from '@yarnpkg/fslib';
+const {PosixFS, ZipOpenFS} = require(`@yarnpkg/fslib`);
+const libzip = require(`@yarnpkg/libzip`).getLibzipSync();
 
 // This will transparently open zip archives
-const zipOpenFs = new ZipOpenFS();
+const zipOpenFs = new ZipOpenFS({libzip});
 
 // This will convert all paths into a Posix variant, required for cross-platform compatibility
-const crossFs = new PosixFS(zipOpenfs);
+const crossFs = new PosixFS(zipOpenFs);
 
 console.log(crossFs.readFileSync(`C:\\path\\to\\archive.zip\\package.json`));
 ```
 
 ## Traversing the dependency tree
 
-Note that the following implementation iterates over all the nodes in the tree and doesn't try at all to skip previously seen nodes. It results in an execution time of a few seconds for each workspace, which can quickly add up. Optimize as needed 🙂
+The following function implements a tree traversal in order to print the list of locators from the tree.
+
+**Important note:** This implementation iterates over **all** the nodes in the tree, even if they are found multiple times (which is very often the case). As a result the execution time is way higher than it could be. Optimize as needed 🙂
 
 ```ts
 const pnp = require(`pnpapi`);
@@ -302,6 +329,8 @@ const traverseDependencyTree = (locator, parentPkg = null) => {
 
   seen.add(key);
 
+  console.group(locator.name);
+
   for (const [name, referencish] of pkg.packageDependencies) {
     // Unmet peer dependencies
     if (referencish === null)
@@ -315,12 +344,16 @@ const traverseDependencyTree = (locator, parentPkg = null) => {
     traverseDependencyTree(childLocator, pkg);
   }
 
+  console.groupEnd(locator.name);
+
+  // Important: This `delete` here causes the traversal to go over nodes even
+  // if they have already been traversed in another branch. If you don't need
+  // that, remove this line for a hefty speed increase.
   seen.delete(key);
 };
 
 // Iterate on each workspace
 for (const locator of pnp.getDependencyTreeRoots()) {
-  console.log(locator.name);
   traverseDependencyTree(locator);
 }
 ```

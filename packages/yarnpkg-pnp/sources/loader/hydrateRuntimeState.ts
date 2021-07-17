@@ -1,6 +1,6 @@
-import {PortablePath, npath, ppath}                                                      from '@yarnpkg/fslib';
+import {PortablePath, npath, ppath}                                                              from '@yarnpkg/fslib';
 
-import {PackageInformation, PackageLocator, PackageStore, RuntimeState, SerializedState} from '../types';
+import {PackageInformation, PackageStore, RuntimeState, SerializedState, PhysicalPackageLocator} from '../types';
 
 export type HydrateRuntimeStateOptions = {
   basePath: string,
@@ -8,48 +8,57 @@ export type HydrateRuntimeStateOptions = {
 
 export function hydrateRuntimeState(data: SerializedState, {basePath}: HydrateRuntimeStateOptions): RuntimeState {
   const portablePath = npath.toPortablePath(basePath);
+  const absolutePortablePath = ppath.resolve(portablePath);
 
   const ignorePattern = data.ignorePatternData !== null
     ? new RegExp(data.ignorePatternData)
     : null;
 
-  const packageRegistry = new Map(data.packageRegistryData.map(([packageName, packageStoreData]) => {
-    return [packageName, new Map(packageStoreData.map(([packageReference, packageInformationData]) => {
-      return [packageReference, {
-        packageLocation: ppath.resolve(portablePath, packageInformationData.packageLocation),
-        packageDependencies: new Map(packageInformationData.packageDependencies),
-        packagePeers: new Set(packageInformationData.packagePeers),
-        linkType: packageInformationData.linkType,
-        discardFromLookup: packageInformationData.discardFromLookup || false,
-      }] as [string | null, PackageInformation<PortablePath>];
-    }))] as [string | null, PackageStore];
-  }));
+  const packageLocatorsByLocations = new Map<PortablePath, {locator: PhysicalPackageLocator, discardFromLookup: boolean}>();
 
-  const packageLocatorsByLocations = new Map<PortablePath, PackageLocator | null>();
-  const packageLocationLengths = new Set<number>();
-
-  for (const [packageName, storeData] of data.packageRegistryData) {
-    for (const [packageReference, packageInformationData] of storeData) {
+  const packageRegistry = new Map<string | null, PackageStore>(data.packageRegistryData.map(([packageName, packageStoreData]) => {
+    return [packageName, new Map<string | null, PackageInformation<PortablePath>>(packageStoreData.map(([packageReference, packageInformationData]) => {
       if ((packageName === null) !== (packageReference === null))
         throw new Error(`Assertion failed: The name and reference should be null, or neither should`);
 
-      if (packageInformationData.discardFromLookup)
-        continue;
+      const discardFromLookup = packageInformationData.discardFromLookup ?? false;
 
-      // @ts-ignore: TypeScript isn't smart enough to understand the type assertion
-      const packageLocator: PackageLocator = {name: packageName, reference: packageReference};
-      packageLocatorsByLocations.set(packageInformationData.packageLocation, packageLocator);
+      // @ts-expect-error: TypeScript isn't smart enough to understand the type assertion
+      const packageLocator: PhysicalPackageLocator = {name: packageName, reference: packageReference};
+      const entry = packageLocatorsByLocations.get(packageInformationData.packageLocation);
+      if (!entry) {
+        packageLocatorsByLocations.set(packageInformationData.packageLocation, {locator: packageLocator, discardFromLookup});
+      } else {
+        entry.discardFromLookup = entry.discardFromLookup && discardFromLookup;
+        if (!discardFromLookup) {
+          entry.locator = packageLocator;
+        }
+      }
 
-      packageLocationLengths.add(packageInformationData.packageLocation.length);
-    }
-  }
+      let resolvedPackageLocation: PortablePath | null = null;
 
-  for (const location of data.locationBlacklistData)
-    packageLocatorsByLocations.set(location, null);
+      return [packageReference, {
+        packageDependencies: new Map(packageInformationData.packageDependencies),
+        packagePeers: new Set(packageInformationData.packagePeers),
+        linkType: packageInformationData.linkType,
+        discardFromLookup,
+        // we only need this for packages that are used by the currently running script
+        // this is a lazy getter because `ppath.join` has some overhead
+        get packageLocation() {
+          // We use ppath.join instead of ppath.resolve because:
+          // 1) packageInformationData.packageLocation is a relative path when part of the SerializedState
+          // 2) ppath.join preserves trailing slashes
+          return resolvedPackageLocation || (resolvedPackageLocation = ppath.join(absolutePortablePath, packageInformationData.packageLocation));
+        },
+      }];
+    }))];
+  }));
 
   const fallbackExclusionList = new Map(data.fallbackExclusionList.map(([packageName, packageReferences]) => {
     return [packageName, new Set(packageReferences)] as [string, Set<string>];
   }));
+
+  const fallbackPool = new Map(data.fallbackPool);
 
   const dependencyTreeRoots = data.dependencyTreeRoots;
   const enableTopLevelFallback = data.enableTopLevelFallback;
@@ -59,8 +68,8 @@ export function hydrateRuntimeState(data: SerializedState, {basePath}: HydrateRu
     dependencyTreeRoots,
     enableTopLevelFallback,
     fallbackExclusionList,
+    fallbackPool,
     ignorePattern,
-    packageLocationLengths: [...packageLocationLengths].sort((a, b) => b - a),
     packageLocatorsByLocations,
     packageRegistry,
   };

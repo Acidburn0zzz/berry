@@ -12,13 +12,13 @@ export class MultiResolver implements Resolver {
   supportsDescriptor(descriptor: Descriptor, opts: MinimalResolveOptions) {
     const resolver = this.tryResolverByDescriptor(descriptor, opts);
 
-    return resolver ? true : false;
+    return !!resolver;
   }
 
   supportsLocator(locator: Locator, opts: MinimalResolveOptions) {
     const resolver = this.tryResolverByLocator(locator, opts);
 
-    return resolver ? true : false;
+    return !!resolver;
   }
 
   shouldPersistResolution(locator: Locator, opts: MinimalResolveOptions) {
@@ -43,6 +43,12 @@ export class MultiResolver implements Resolver {
     const resolver = this.getResolverByDescriptor(descriptor, opts);
 
     return await resolver.getCandidates(descriptor, dependencies, opts);
+  }
+
+  async getSatisfying(descriptor: Descriptor, references: Array<string>, opts: ResolveOptions) {
+    const resolver = this.getResolverByDescriptor(descriptor, opts);
+
+    return resolver.getSatisfying(descriptor, references, opts);
   }
 
   async resolve(locator: Locator, opts: ResolveOptions) {

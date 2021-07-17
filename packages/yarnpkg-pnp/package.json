@@ -1,23 +1,26 @@
 {
   "name": "@yarnpkg/pnp",
-  "version": "2.0.0-rc.17",
+  "version": "3.0.0-rc.9",
+  "license": "BSD-2-Clause",
   "main": "./sources/index.ts",
   "dependencies": {
     "@types/node": "^13.7.0",
-    "@yarnpkg/fslib": "workspace:^2.0.0-rc.16"
+    "@yarnpkg/fslib": "workspace:^2.5.0-rc.9",
+    "resolve.exports": "^1.0.2",
+    "tslib": "^1.13.0"
   },
   "devDependencies": {
-    "@yarnpkg/builder": "workspace:^2.0.0-rc.19",
-    "@yarnpkg/libzip": "workspace:^2.0.0-rc.10",
-    "@yarnpkg/pnpify": "workspace:^2.0.0-rc.18",
-    "typescript": "^3.7.5",
-    "webpack": "^4.41.2",
-    "webpack-cli": "^3.2.1",
-    "webpack-sources": "^1.3.0"
+    "@yarnpkg/builder": "workspace:*",
+    "@yarnpkg/libzip": "workspace:*",
+    "@yarnpkg/monorepo": "workspace:*",
+    "typescript": "^4.3.2",
+    "webpack": "^5.1.1",
+    "webpack-cli": "^4.0.0-beta.8"
   },
   "scripts": {
-    "build:pnp:hook": "run pnpify webpack-cli --config webpack.config.hook.js",
-    "build:pnp": "run pnpify webpack-cli --config webpack.config.pkg.js",
+    "build:pnp:hook": "webpack-cli --config webpack.config.hook.js",
+    "update:pnp:hook": "run build:pnp:hook && yarn install",
+    "build:pnp": "webpack-cli --config webpack.config.pkg.js",
     "postpack": "rm -rf lib",
     "prepack": "run build:compile packages/yarnpkg-pnp --emitDeclarationOnly && run build:pnp",
     "release": "yarn npm publish",
@@ -32,6 +35,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com/yarnpkg/berry.git"
-  }
+    "url": "ssh://git@github.com/yarnpkg/berry.git",
+    "directory": "packages/yarnpkg-pnp"
+  },
+  "engines": {
+    "node": ">=12 <14 || 14.2 - 14.9 || >14.10.0"
+  },
+  "stableVersion": "2.3.2"
 }

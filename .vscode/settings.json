@@ -1,16 +1,28 @@
 {
   "editor.tabSize": 2,
   "files.eol": "\n",
-  "typescript.tsdk": ".vscode/pnpify/typescript/lib",
+  "typescript.tsdk": ".yarn/sdks/typescript/lib",
+  "typescript.tsserver.watchOptions": {
+    "watchFile": "useFsEventsOnParentDirectory",
+    "watchDirectory": "useFsEvents"
+  },
   "npm.packageManager": "yarn",
   "eslint.validate": [
     "javascript",
     "typescript",
     "typescriptreact"
   ],
-  "eslint.enable": true,
-  "eslint.nodePath": ".vscode/pnpify",
+  "eslint.nodePath": ".yarn/sdks",
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": true
+  },
+  "pasteImage.path": "${projectRoot}/packages/gatsby/static",
+  "pasteImage.basePath": "${projectRoot}/packages/gatsby/static",
+  "pasteImage.forceUnixStyleSeparator": true,
+  "pasteImage.prefix": "/",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "search.exclude": {
+    "**/.yarn": true,
+    "**/.pnp.*": true
   }
 }

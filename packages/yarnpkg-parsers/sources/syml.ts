@@ -1,4 +1,3 @@
-// @ts-ignore
 import {safeLoad, FAILSAFE_SCHEMA} from 'js-yaml';
 
 import {parse}                     from './grammars/syml';
@@ -22,6 +21,16 @@ function stringifyString(value: string): string {
   }
 }
 
+function isRemovableField(value: any): boolean {
+  if (typeof value === `undefined`)
+    return true;
+
+  if (typeof value === `object` && value !== null)
+    return Object.keys(value).every(key => isRemovableField(value[key]));
+
+  return false;
+}
+
 function stringifyValue(value: any, indentLevel: number, newLineIfObject: boolean): string {
   if (value === null)
     return `null\n`;
@@ -33,6 +42,9 @@ function stringifyValue(value: any, indentLevel: number, newLineIfObject: boolea
     return `${stringifyString(value)}\n`;
 
   if (Array.isArray(value)) {
+    if (value.length === 0)
+      return `[]\n`;
+
     const indent = `  `.repeat(indentLevel);
 
     const serialized = value.map(sub => {
@@ -75,7 +87,7 @@ function stringifyValue(value: any, indentLevel: number, newLineIfObject: boolea
     }
 
     const fields = keys.filter(key => {
-      return data[key] !== undefined;
+      return !isRemovableField(data[key]);
     }).map((key, index) => {
       const value = data[key];
 
@@ -105,7 +117,8 @@ function stringifyValue(value: any, indentLevel: number, newLineIfObject: boolea
 
 export function stringifySyml(value: any) {
   try {
-    return stringifyValue(value, 0, false);
+    const stringified = stringifyValue(value, 0, false);
+    return stringified !== `\n` ? stringified : ``;
   } catch (error) {
     if (error.location)
       error.message = error.message.replace(/(\.)?$/, ` (line ${error.location.start.line}, column ${error.location.start.column})$1`);
@@ -128,8 +141,9 @@ function parseViaJsYaml(source: string) {
   if (LEGACY_REGEXP.test(source))
     return parseViaPeg(source);
 
-  let value = safeLoad(source, {
+  const value = safeLoad(source, {
     schema: FAILSAFE_SCHEMA,
+    json: true,
   });
 
   // Empty files are parsed as `undefined` instead of an empty object

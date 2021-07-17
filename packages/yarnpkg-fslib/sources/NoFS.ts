@@ -30,6 +30,14 @@ export class NoFS extends FakeFS<PortablePath> {
     throw makeError();
   }
 
+  async opendirPromise(): Promise<never> {
+    throw makeError();
+  }
+
+  opendirSync(): never {
+    throw makeError();
+  }
+
   async readPromise(): Promise<never> {
     throw makeError();
   }
@@ -102,6 +110,14 @@ export class NoFS extends FakeFS<PortablePath> {
     throw makeError();
   }
 
+  async fstatPromise(fd: number): Promise<never> {
+    throw makeError();
+  }
+
+  fstatSync(fd: number): never {
+    throw makeError();
+  }
+
   async lstatPromise(p: PortablePath): Promise<never> {
     throw makeError();
   }
@@ -118,6 +134,14 @@ export class NoFS extends FakeFS<PortablePath> {
     throw makeError();
   }
 
+  async chownPromise(): Promise<never> {
+    throw makeError();
+  }
+
+  chownSync(): never {
+    throw makeError();
+  }
+
   async mkdirPromise(): Promise<never> {
     throw makeError();
   }
@@ -131,6 +155,14 @@ export class NoFS extends FakeFS<PortablePath> {
   }
 
   rmdirSync(): never {
+    throw makeError();
+  }
+
+  async linkPromise(): Promise<never> {
+    throw makeError();
+  }
+
+  linkSync(): never {
     throw makeError();
   }
 
@@ -206,7 +238,23 @@ export class NoFS extends FakeFS<PortablePath> {
     throw makeError();
   }
 
+  async truncatePromise(): Promise<never> {
+    throw makeError();
+  }
+
+  truncateSync(): never {
+    throw makeError();
+  }
+
   watch(): never {
+    throw makeError();
+  }
+
+  watchFile(): never {
+    throw makeError();
+  }
+
+  unwatchFile(): never {
     throw makeError();
   }
 }

@@ -1,8 +1,8 @@
-import {xfs, ppath} from '@yarnpkg/fslib';
+import {Filename, xfs, ppath} from '@yarnpkg/fslib';
 
 const {
-  fs: {writeJson},
-} = require('pkg-tests-core');
+  fs: {writeJson, writeFile},
+} = require(`pkg-tests-core`);
 
 describe(`Commands`, () => {
   describe(`install`, () => {
@@ -16,6 +16,40 @@ describe(`Commands`, () => {
         const {stdout} = await run(`install`, `--inline-builds`);
 
         await expect(stdout).toMatchSnapshot();
+      }),
+    );
+
+    test(
+      `it should skip build scripts when using --skip-builds`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`no-deps-scripted`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        const {stdout} = await run(`install`, `--inline-builds`, `--skip-builds`);
+
+        await expect(stdout).toMatchSnapshot();
+      }),
+    );
+
+    test(
+      `it shouldn't impact how artifacts are generated when using --skip-builds`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`no-deps-scripted`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        const pnpPath = ppath.join(path, Filename.pnpCjs);
+
+        await run(`install`);
+        const pnpFileWithBuilds = await xfs.readFilePromise(pnpPath);
+
+        await xfs.removePromise(pnpPath);
+
+        await run(`install`, `--skip-builds`);
+        const pnpFileWithoutBuilds = await xfs.readFilePromise(pnpPath);
+
+        expect(pnpFileWithBuilds).toEqual(pnpFileWithoutBuilds);
       }),
     );
 
@@ -61,12 +95,23 @@ describe(`Commands`, () => {
     );
 
     test(
+      `it should refuse to create a cache when using --immutable-cache`,
+      makeTemporaryEnv({
+        dependencies: {},
+      }, async ({path, run, source}) => {
+        await expect(run(`install`, `--immutable-cache`)).rejects.toThrowError(/Cache path does not exist/);
+      })
+    );
+
+    test(
       `it should refuse to add files to the cache when using --immutable-cache`,
       makeTemporaryEnv({
         dependencies: {
           [`no-deps`]: `1.0.0`,
         },
       }, async ({path, run, source}) => {
+        // Ensure the cache directory exists
+        await xfs.mkdirPromise(`${path}/.yarn/cache`, {recursive: true});
         await expect(run(`install`, `--immutable-cache`)).rejects.toThrow(/YN0056/);
       })
     );
@@ -80,7 +125,9 @@ describe(`Commands`, () => {
       }, async ({path, run, source}) => {
         await run(`install`);
 
+        // Empty, rather than remove the cache
         await xfs.removePromise(`${path}/.yarn/cache`);
+        await xfs.mkdirPromise(`${path}/.yarn/cache`, {recursive: true});
 
         await expect(run(`install`, `--immutable-cache`)).rejects.toThrow(/YN0056/);
       })
@@ -143,6 +190,9 @@ describe(`Commands`, () => {
           archiveName2 = zipFiles2[0];
         }
 
+        // We need to replace the hash in the cache filename, otherwise the cache just won't find the archive
+        archiveName1 = archiveName1.replace(/[^-]+$/, archiveName2.match(/[^-]+$/)[0]);
+
         await xfs.writeJsonPromise(ppath.join(path, `package.json`), {
           dependencies: {
             [`no-deps`]: `1.0.0`,
@@ -169,10 +219,10 @@ describe(`Commands`, () => {
     );
 
     test(
-      "reports warning if published binary field is a path but no package name is set",
+      `reports warning if published binary field is a path but no package name is set`,
       makeTemporaryEnv(
         {
-          bin: "./bin/cli.js",
+          bin: `./bin/cli.js`,
         },
         async ({path, run, source}) => {
           await expect(run(`install`)).resolves.toMatchSnapshot();
@@ -181,22 +231,123 @@ describe(`Commands`, () => {
     );
 
     test(
-      "displays validation issues of nested workspaces",
+      `displays validation issues of nested workspaces`,
       makeTemporaryEnv(
         {
-          workspaces: ["packages"],
+          workspaces: [`packages`],
         },
         async ({path, run, source}) => {
           await writeJson(`${path}/packages/package.json`, {
-            workspaces: ["package-a"],
+            workspaces: [`package-a`],
           });
           await writeJson(`${path}/packages/package-a/package.json`, {
-            bin: "./bin/cli.js",
+            bin: `./bin/cli.js`,
           });
 
           await expect(run(`install`)).resolves.toMatchSnapshot();
         }
       )
+    );
+
+    test(
+      `should not build virtual workspaces`,
+      makeTemporaryEnv(
+        {
+          workspaces: [`workspace`],
+          dependencies: {
+            foo: `workspace:*`,
+            'no-deps': `*`,
+          },
+        },
+        async ({path, run, source}) => {
+          await xfs.mkdirPromise(`${path}/workspace`);
+          await xfs.writeJsonPromise(`${path}/workspace/package.json`, {
+            name: `foo`,
+            scripts: {
+              postinstall: `echo "foo"`,
+            },
+            peerDependencies: {
+              'no-deps': `*`,
+            },
+          });
+
+          await expect(run(`install`)).resolves.toMatchSnapshot();
+        }
+      )
+    );
+
+    test(
+      `should only print one error message for failed builds`,
+      makeTemporaryEnv(
+        {
+          scripts: {
+            postinstall: `exit 1`,
+          },
+        },
+        async ({path, run, source}) => {
+          let code;
+          let stdout;
+
+          try {
+            ({code, stdout} = await run(`install`));
+          } catch (error) {
+            ({code, stdout} = error);
+          }
+
+          expect(code).toEqual(1);
+          expect(stdout.match(/YN0009/g).length).toEqual(1);
+        }
+      )
+    );
+
+    test(
+      `should not continue running build scripts if one of them fails`,
+      makeTemporaryEnv(
+        {
+          scripts: {
+            preinstall: `exit 1`,
+            postinstall: `echo 'foo'`,
+          },
+        },
+        async ({path, run, source}) => {
+          await expect(run(`install`, `--inline-builds`)).rejects.toMatchObject({
+            code: 1,
+            stdout: expect.not.stringContaining(`foo`),
+          });
+        }
+      )
+    );
+
+    test(
+      `it should print a warning when using \`enableScripts: false\``,
+      makeTemporaryEnv({
+        dependencies: {
+          [`no-deps-scripted`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        await writeFile(`${path}/.yarnrc.yml`, `enableScripts: false`);
+        const {stdout} = await run(`install`, `--inline-builds`);
+        expect(stdout).toMatch(/YN0004/g);
+      }),
+    );
+
+    test(
+      `it should print an info when \`dependenciesMeta[].built: false\`, even when using using \`enableScripts: false\``,
+      makeTemporaryEnv({
+        dependencies: {
+          [`no-deps-scripted`]: `1.0.0`,
+        },
+        dependenciesMeta: {
+          'no-deps-scripted': {
+            built: false,
+          },
+        },
+      }, async ({path, run, source}) => {
+        await writeFile(`${path}/.yarnrc.yml`, `enableScripts: false`);
+        const {stdout} = await run(`install`, `--inline-builds`);
+        expect(stdout).toMatch(/YN0005/g);
+        expect(stdout).not.toMatch(/YN0004/g);
+      }),
     );
   });
 });

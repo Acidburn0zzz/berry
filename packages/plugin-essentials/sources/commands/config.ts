@@ -1,32 +1,19 @@
-import {BaseCommand}                                            from '@yarnpkg/cli';
-import {Configuration, MessageName, SettingsType, StreamReport} from '@yarnpkg/core';
-import {miscUtils}                                              from '@yarnpkg/core';
-import {Command, Usage}                                         from 'clipanion';
-import {inspect}                                                from 'util';
+import {BaseCommand}                              from '@yarnpkg/cli';
+import {Configuration, MessageName, StreamReport} from '@yarnpkg/core';
+import {miscUtils}                                from '@yarnpkg/core';
+import {Command, Option, Usage}                   from 'clipanion';
+import {inspect}                                  from 'util';
 
 // eslint-disable-next-line arca/no-default-export
 export default class ConfigCommand extends BaseCommand {
-  @Command.Boolean(`-v,--verbose`)
-  verbose: boolean = false;
-
-  @Command.Boolean(`--why`)
-  why: boolean = false;
-
-  @Command.Boolean(`--json`)
-  json: boolean = false;
+  static paths = [
+    [`config`],
+  ];
 
   static usage: Usage = Command.Usage({
     description: `display the current configuration`,
     details: `
       This command prints the current active configuration settings.
-
-      When used together with the \`-v,--verbose\` option, the output will contain the settings description on top of the regular key/value information.
-
-      When used together with the \`--why\` flag, the output will also contain the reason why a settings is set a particular way.
-
-      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
-
-      Note that the paths settings will be normalized - especially on Windows. It means that paths such as \`C:\\project\` will be transparently shown as \`/mnt/c/project\`.
     `,
     examples: [[
       `Print the active configuration settings`,
@@ -34,22 +21,22 @@ export default class ConfigCommand extends BaseCommand {
     ]],
   });
 
-  @Command.Path(`config`)
+  verbose = Option.Boolean(`-v,--verbose`, false, {
+    description: `Print the setting description on top of the regular key/value information`,
+  });
+
+  why = Option.Boolean(`--why`, false, {
+    description: `Print the reason why a setting is set a particular way`,
+  });
+
+  json = Option.Boolean(`--json`, false, {
+    description: `Format the output as an NDJSON stream`,
+  });
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins, {
       strict: false,
     });
-
-    const getValue = (key: string) => {
-      const isSecret = configuration.settings.get(key)!.type === SettingsType.SECRET;
-      const rawValue = configuration.values.get(key)!;
-
-      if (isSecret && typeof rawValue === `string`) {
-        return `********`;
-      } else {
-        return rawValue;
-      }
-    };
 
     const report = await StreamReport.start({
       configuration,
@@ -69,7 +56,11 @@ export default class ConfigCommand extends BaseCommand {
         for (const key of keys) {
           const data = configuration.settings.get(key);
 
-          const effective = getValue(key);
+          const effective = configuration.getSpecial(key, {
+            hideSecrets: true,
+            getNativePaths: true,
+          });
+
           const source = configuration.sources.get(key);
 
           if (this.verbose) {
@@ -107,11 +98,11 @@ export default class ConfigCommand extends BaseCommand {
           }, 0);
 
           for (const [key, description] of keysAndDescriptions) {
-            report.reportInfo(null, `${key.padEnd(maxKeyLength, ` `)}   ${description.padEnd(maxDescriptionLength, ` `)}   ${inspect(getValue(key), inspectConfig)}`);
+            report.reportInfo(null, `${key.padEnd(maxKeyLength, ` `)}   ${description.padEnd(maxDescriptionLength, ` `)}   ${inspect(configuration.getSpecial(key, {hideSecrets: true, getNativePaths: true}), inspectConfig)}`);
           }
         } else {
           for (const key of keys) {
-            report.reportInfo(null, `${key.padEnd(maxKeyLength, ` `)}   ${inspect(getValue(key), inspectConfig)}`);
+            report.reportInfo(null, `${key.padEnd(maxKeyLength, ` `)}   ${inspect(configuration.getSpecial(key, {hideSecrets: true, getNativePaths: true}), inspectConfig)}`);
           }
         }
       }

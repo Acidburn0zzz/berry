@@ -24,13 +24,13 @@ const defaultRuntimeState = $$SETUP_STATE(hydrateRuntimeState);
 const defaultPnpapiResolution = __filename;
 
 // We create a virtual filesystem that will do three things:
-// 1. all requests inside a folder named "$$virtual" will be remapped according the virtual folder rules
+// 1. all requests inside a folder named "__virtual___" will be remapped according the virtual folder rules
 // 2. all requests going inside a Zip archive will be handled by the Zip fs implementation
 // 3. any remaining request will be forwarded to Node as-is
 const defaultFsLayer: FakeFS<PortablePath> = new VirtualFS({
   baseFs: new ZipOpenFS({
     baseFs: nodeFs,
-    libzip: getLibzipSync(),
+    libzip: () => getLibzipSync(),
     maxOpenFiles: 80,
     readOnlyArchives: true,
   }),
@@ -83,19 +83,17 @@ manager = makeManager(defaultApi, {
 // eslint-disable-next-line arca/no-default-export
 export default defaultApi;
 
-if (__non_webpack_module__.parent && __non_webpack_module__.parent.id === 'internal/preload') {
+if (__non_webpack_module__.parent && __non_webpack_module__.parent.id === `internal/preload`) {
   defaultApi.setup();
 
   if (__non_webpack_module__.filename) {
     // We delete it from the cache in order to support the case where the CLI resolver is invoked from "yarn run"
     // It's annoying because it might cause some issues when the file is multiple times in NODE_OPTIONS, but it shouldn't happen anyway.
 
-    // @ts-ignore
     delete Module._cache[__non_webpack_module__.filename];
   }
 }
 
-// @ts-ignore
 if (process.mainModule === __non_webpack_module__) {
   const reportError = (code: string, message: string, data: Object) => {
     process.stdout.write(`${JSON.stringify([{code, message, data}, null])}\n`);
@@ -130,14 +128,14 @@ if (process.mainModule === __non_webpack_module__) {
       processResolution(process.argv[2], process.argv[3]);
     }
   } else {
-    let buffer = '';
+    let buffer = ``;
     const decoder = new StringDecoder.StringDecoder();
 
-    process.stdin.on('data', chunk => {
+    process.stdin.on(`data`, chunk => {
       buffer += decoder.write(chunk);
 
       do {
-        const index = buffer.indexOf('\n');
+        const index = buffer.indexOf(`\n`);
         if (index === -1)
           break;
 

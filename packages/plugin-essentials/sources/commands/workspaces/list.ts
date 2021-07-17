@@ -1,26 +1,29 @@
-import {BaseCommand}                                                              from '@yarnpkg/cli';
-import {Configuration, Project, StreamReport, structUtils, Descriptor, Workspace} from '@yarnpkg/core';
-import {Command, Usage}                                                           from 'clipanion';
-
-const DEPENDENCY_TYPES = ['devDependencies', 'dependencies'];
+import {BaseCommand}                                                                        from '@yarnpkg/cli';
+import {Configuration, Manifest, Project, StreamReport, structUtils, Descriptor, Workspace} from '@yarnpkg/core';
+import {Command, Option, Usage}                                                             from 'clipanion';
 
 // eslint-disable-next-line arca/no-default-export
 export default class WorkspacesListCommand extends BaseCommand {
-  @Command.Boolean(`-v,--verbose`)
-  verbose: boolean = false;
-
-  @Command.Boolean(`--json`)
-  json: boolean = false;
+  static paths = [
+    [`workspaces`, `list`],
+  ];
 
   static usage: Usage = Command.Usage({
     category: `Workspace-related commands`,
     description: `list all available workspaces`,
     details: `
-      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
+      This command will print the list of all workspaces in the project. If both the \`-v,--verbose\` and \`--json\` options are set, Yarn will also return the cross-dependencies between each workspaces (useful when you wish to automatically generate Buck / Bazel rules).
     `,
   });
 
-  @Command.Path(`workspaces`, `list`)
+  verbose = Option.Boolean(`-v,--verbose`, false, {
+    description: `Also return the cross-dependencies between workspaces`,
+  });
+
+  json = Option.Boolean(`--json`, false, {
+    description: `Format the output as an NDJSON stream`,
+  });
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project} = await Project.find(configuration, this.context.cwd);
@@ -38,7 +41,7 @@ export default class WorkspacesListCommand extends BaseCommand {
           const workspaceDependencies = new Set<Workspace>();
           const mismatchedWorkspaceDependencies = new Set<Descriptor>();
 
-          for (const dependencyType of DEPENDENCY_TYPES) {
+          for (const dependencyType of Manifest.hardDependencies) {
             for (const [identHash, descriptor]  of manifest.getForScope(dependencyType)) {
               const matchingWorkspace = project.tryWorkspaceByDescriptor(descriptor);
 

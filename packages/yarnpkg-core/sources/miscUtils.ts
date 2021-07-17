@@ -1,18 +1,37 @@
 import {PortablePath, npath} from '@yarnpkg/fslib';
+import {UsageError}          from 'clipanion';
+import micromatch            from 'micromatch';
 import {Readable, Transform} from 'stream';
 
+/**
+ * @internal
+ */
+export function isTaggedYarnVersion(version: string) {
+  return version.match(/^[^-]+(-rc\.[0-9]+)?$/);
+}
+
 export function escapeRegExp(str: string) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`);
+}
+
+export function overrideType<T>(val: unknown): asserts val is T {
 }
 
 export function assertNever(arg: never): never {
   throw new Error(`Assertion failed: Unexpected object '${arg}'`);
 }
 
-export function mapAndFilter<In, Out>(array: Array<In>, cb: (value: In) => Out | typeof mapAndFilterSkip): Array<Out> {
+export function validateEnum<T>(def: {[key: string]: T}, value: string): T {
+  if (!Object.values(def).includes(value as any))
+    throw new Error(`Assertion failed: Invalid value for enumeration`);
+
+  return value as any as T;
+}
+
+export function mapAndFilter<In, Out>(iterable: Iterable<In>, cb: (value: In) => Out | typeof mapAndFilterSkip): Array<Out> {
   const output: Array<Out> = [];
 
-  for (const value of array) {
+  for (const value of iterable) {
     const out = cb(value);
     if (out !== mapAndFilterSkip) {
       output.push(out);
@@ -24,6 +43,57 @@ export function mapAndFilter<In, Out>(array: Array<In>, cb: (value: In) => Out |
 
 const mapAndFilterSkip = Symbol();
 mapAndFilter.skip = mapAndFilterSkip;
+
+export function mapAndFind<In, Out>(iterable: Iterable<In>, cb: (value: In) => Out | typeof mapAndFindSkip): Out | undefined {
+  for (const value of iterable) {
+    const out = cb(value);
+    if (out !== mapAndFindSkip) {
+      return out;
+    }
+  }
+
+  return undefined;
+}
+
+const mapAndFindSkip = Symbol();
+mapAndFind.skip = mapAndFindSkip;
+
+export function isIndexableObject(value: unknown): value is {[key: string]: unknown} {
+  return typeof value === `object` && value !== null;
+}
+
+export type MapValue<T> = T extends Map<any, infer V> ? V : never;
+
+export interface ToMapValue<T extends object> {
+  get<K extends keyof T>(key: K): T[K];
+}
+
+export type MapValueToObjectValue<T> =
+  T extends Map<infer K, infer V> ? (K extends string | number | symbol ? MapValueToObjectValue<Record<K, V>> : never)
+    : T extends ToMapValue<infer V> ? MapValueToObjectValue<V>
+      : T extends PortablePath ? PortablePath
+        : T extends object ? {[K in keyof T]: MapValueToObjectValue<T[K]>}
+          : T;
+
+/**
+ * Converts Maps to indexable objects recursively.
+ */
+export function convertMapsToIndexableObjects<T>(arg: T): MapValueToObjectValue<T> {
+  if (arg instanceof Map)
+    arg = Object.fromEntries(arg);
+
+  if (isIndexableObject(arg)) {
+    for (const key of Object.keys(arg)) {
+      const value = arg[key];
+      if (isIndexableObject(value)) {
+        // @ts-expect-error: Apparently nothing in this world can be used to index type 'T & { [key: string]: unknown; }'
+        arg[key] = convertMapsToIndexableObjects(value);
+      }
+    }
+  }
+
+  return arg as MapValueToObjectValue<T>;
+}
 
 export function getFactoryWithDefault<K, T>(map: Map<K, T>, key: K, factory: () => T) {
   let value = map.get(key);
@@ -161,6 +231,8 @@ export class DefaultStream extends Transform {
   _flush(cb: any) {
     if (this.active && this.ifEmpty.length > 0) {
       cb(null, this.ifEmpty);
+    } else {
+      cb(null);
     }
   }
 }
@@ -169,34 +241,28 @@ export class DefaultStream extends Transform {
 // code that simply throws when called. It's all fine and dandy in the context
 // of a web application, but is quite annoying when working with Node projects!
 
-export function dynamicRequire(path: string) {
-  // @ts-ignore
-  if (typeof __non_webpack_require__ !== 'undefined') {
-    // @ts-ignore
-    return __non_webpack_require__(path);
-  } else {
-    return require(path);
-  }
-}
+export const dynamicRequire: NodeRequire = eval(`require`);
 
 export function dynamicRequireNoCache(path: PortablePath) {
   const physicalPath = npath.fromPortablePath(path);
 
-  const currentCacheEntry = require.cache[physicalPath];
-  delete require.cache[physicalPath];
+  const currentCacheEntry = dynamicRequire.cache[physicalPath];
+  delete dynamicRequire.cache[physicalPath];
 
   let result;
   try {
     result = dynamicRequire(physicalPath);
 
-    const freshCacheEntry = require.cache[physicalPath];
-    const freshCacheIndex = module.children.indexOf(freshCacheEntry);
+    const freshCacheEntry = dynamicRequire.cache[physicalPath];
+
+    const dynamicModule = eval(`module`) as NodeModule;
+    const freshCacheIndex = dynamicModule.children.indexOf(freshCacheEntry);
 
     if (freshCacheIndex !== -1) {
-      module.children.splice(freshCacheIndex, 1);
+      dynamicModule.children.splice(freshCacheIndex, 1);
     }
   } finally {
-    require.cache[physicalPath] = currentCacheEntry;
+    dynamicRequire.cache[physicalPath] = currentCacheEntry;
   }
 
   return result;
@@ -239,4 +305,90 @@ export function sortMap<T>(values: Iterable<T>, mappers: ((value: T) => string) 
   return indices.map(index => {
     return asArray[index];
   });
+}
+
+/**
+ * Combines an Array of glob patterns into a regular expression.
+ *
+ * @param ignorePatterns An array of glob patterns
+ *
+ * @returns A `string` representing a regular expression or `null` if no glob patterns are provided
+ */
+export function buildIgnorePattern(ignorePatterns: Array<string>) {
+  if (ignorePatterns.length === 0)
+    return null;
+
+  return ignorePatterns.map(pattern => {
+    return `(${micromatch.makeRe(pattern, {
+      windows: false,
+      dot: true,
+    }).source})`;
+  }).join(`|`);
+}
+
+export function replaceEnvVariables(value: string, {env}: {env: {[key: string]: string | undefined}}) {
+  const regex = /\${(?<variableName>[\d\w_]+)(?<colon>:)?(?:-(?<fallback>[^}]*))?}/g;
+
+  return value.replace(regex, (...args) => {
+    const {variableName, colon, fallback} = args[args.length - 1];
+
+    const variableExist = Object.prototype.hasOwnProperty.call(env, variableName);
+    const variableValue = env[variableName];
+
+    if (variableValue)
+      return variableValue;
+    if (variableExist && !colon)
+      return variableValue;
+    if (fallback != null)
+      return fallback;
+
+    throw new UsageError(`Environment variable not found (${variableName})`);
+  });
+}
+
+export function parseBoolean(value: unknown): boolean {
+  switch (value) {
+    case `true`:
+    case `1`:
+    case 1:
+    case true: {
+      return true;
+    }
+
+    case `false`:
+    case `0`:
+    case 0:
+    case false: {
+      return false;
+    }
+
+    default: {
+      throw new Error(`Couldn't parse "${value}" as a boolean`);
+    }
+  }
+}
+
+export function parseOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === `undefined`)
+    return value;
+
+  return parseBoolean(value);
+}
+
+export function tryParseOptionalBoolean(value: unknown): boolean | undefined | null {
+  try {
+    return parseOptionalBoolean(value);
+  } catch {
+    return null;
+  }
+}
+
+export type FilterKeys<T extends {}, Filter> = {
+  [K in keyof T]: T[K] extends Filter ? K : never;
+}[keyof T];
+
+export function isPathLike(value: string): boolean {
+  if (npath.isAbsolute(value) || value.match(/^(\.{1,2}|~)\//))
+    return true;
+  return false;
 }

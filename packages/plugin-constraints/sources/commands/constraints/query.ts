@@ -1,25 +1,21 @@
 import {BaseCommand}            from '@yarnpkg/cli';
 import {Configuration, Project} from '@yarnpkg/core';
 import {StreamReport}           from '@yarnpkg/core';
-import {Command, Usage}         from 'clipanion';
+import {Command, Option, Usage} from 'clipanion';
 
 import {Constraints}            from '../../Constraints';
 
 // eslint-disable-next-line arca/no-default-export
 export default class ConstraintsQueryCommand extends BaseCommand {
-  @Command.Boolean(`--json`)
-  json: boolean = false;
-
-  @Command.String()
-  query!: string;
+  static paths = [
+    [`constraints`, `query`],
+  ];
 
   static usage: Usage = Command.Usage({
     category: `Constraints-related commands`,
     description: `query the constraints fact database`,
     details: `
       This command will output all matches to the given prolog query.
-
-      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
     `,
     examples: [[
       `List all dependencies throughout the workspace`,
@@ -27,7 +23,12 @@ export default class ConstraintsQueryCommand extends BaseCommand {
     ]],
   });
 
-  @Command.Path(`constraints`, `query`)
+  json = Option.Boolean(`--json`, false, {
+    description: `Format the output as an NDJSON stream`,
+  });
+
+  query = Option.String();
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project} = await Project.find(configuration, this.context.cwd);
@@ -61,7 +62,7 @@ export default class ConstraintsQueryCommand extends BaseCommand {
   }
 }
 
-function valueToString(value: string|null): string {
+function valueToString(value: string | null): string {
   if (typeof value !== `string`)
     return `${value}`;
 

@@ -1,13 +1,22 @@
-import got, {GotOptions, NormalizedOptions, Response} from 'got';
-import {Agent as HttpsAgent}                          from 'https';
-import {Agent as HttpAgent}                           from 'http';
-import micromatch                                     from 'micromatch';
-import tunnel, {ProxyOptions}                         from 'tunnel';
-import {URL}                                          from 'url';
+import {PortablePath, xfs}                                   from '@yarnpkg/fslib';
+import {ExtendOptions, RequestError, Response, TimeoutError} from 'got';
+import {Agent as HttpsAgent}                                 from 'https';
+import {Agent as HttpAgent}                                  from 'http';
+import micromatch                                            from 'micromatch';
+import tunnel, {ProxyOptions}                                from 'tunnel';
+import {URL}                                                 from 'url';
 
-import {Configuration}                                from './Configuration';
+import {ConfigurationValueMap, Configuration}                from './Configuration';
+import {MessageName}                                         from './MessageName';
+import {ReportError}                                         from './Report';
+import * as formatUtils                                      from './formatUtils';
+import {MapValue, MapValueToObjectValue}                     from './miscUtils';
+import * as miscUtils                                        from './miscUtils';
 
-const cache = new Map<string, Promise<Response<Buffer>>>();
+export {RequestError} from 'got';
+
+const cache = new Map<string, Promise<Buffer> | Buffer>();
+const certCache = new Map<PortablePath, Promise<Buffer> | Buffer>();
 
 const globalHttpAgent = new HttpAgent({keepAlive: true});
 const globalHttpsAgent = new HttpsAgent({keepAlive: true});
@@ -22,6 +31,123 @@ function parseProxy(specifier: string) {
   return {proxy};
 }
 
+async function getCachedCertificate(caFilePath: PortablePath) {
+  return miscUtils.getFactoryWithDefault(certCache, caFilePath, () => {
+    return xfs.readFilePromise(caFilePath).then(cert => {
+      certCache.set(caFilePath, cert);
+      return cert;
+    });
+  });
+}
+
+function prettyResponseCode({statusCode, statusMessage}: Response, configuration: Configuration) {
+  const prettyStatusCode = formatUtils.pretty(configuration, statusCode, formatUtils.Type.NUMBER);
+  const href = `https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/${statusCode}`;
+
+  return formatUtils.applyHyperlink(configuration, `${prettyStatusCode}${statusMessage ? ` (${statusMessage})` : ``}`, href);
+}
+
+async function prettyNetworkError(response: Promise<Response<any>>, {configuration, customErrorMessage}: {configuration: Configuration, customErrorMessage?: (err: RequestError) => string | null}) {
+  try {
+    return await response;
+  } catch (err) {
+    if (err.name !== `HTTPError`)
+      throw err;
+
+    let message = customErrorMessage?.(err) ?? err.response.body?.error;
+
+    if (message == null) {
+      if (err.message.startsWith(`Response code`)) {
+        message = `The remote server failed to provide the requested resource`;
+      } else {
+        message = err.message;
+      }
+    }
+
+    if (err instanceof TimeoutError && err.event === `socket`)
+      message += `(can be increased via ${formatUtils.pretty(configuration, `httpTimeout`, formatUtils.Type.SETTING)})`;
+
+    const networkError = new ReportError(MessageName.NETWORK_ERROR, message, report => {
+      if (err.response) {
+        report.reportError(MessageName.NETWORK_ERROR, `  ${formatUtils.prettyField(configuration, {
+          label: `Response Code`,
+          value: formatUtils.tuple(formatUtils.Type.NO_HINT, prettyResponseCode(err.response, configuration)),
+        })}`);
+      }
+
+      if (err.request) {
+        report.reportError(MessageName.NETWORK_ERROR, `  ${formatUtils.prettyField(configuration, {
+          label: `Request Method`,
+          value: formatUtils.tuple(formatUtils.Type.NO_HINT, err.request.options.method),
+        })}`);
+
+        report.reportError(MessageName.NETWORK_ERROR, `  ${formatUtils.prettyField(configuration, {
+          label: `Request URL`,
+          value: formatUtils.tuple(formatUtils.Type.URL, err.request.requestUrl),
+        })}`);
+      }
+
+      if (err.request.redirects.length > 0) {
+        report.reportError(MessageName.NETWORK_ERROR, `  ${formatUtils.prettyField(configuration, {
+          label: `Request Redirects`,
+          value: formatUtils.tuple(formatUtils.Type.NO_HINT, formatUtils.prettyList(configuration, err.request.redirects, formatUtils.Type.URL)),
+        })}`);
+      }
+
+      if (err.request.retryCount === err.request.options.retry.limit) {
+        report.reportError(MessageName.NETWORK_ERROR, `  ${formatUtils.prettyField(configuration, {
+          label: `Request Retry Count`,
+          value: formatUtils.tuple(formatUtils.Type.NO_HINT, `${formatUtils.pretty(configuration, err.request.retryCount, formatUtils.Type.NUMBER)} (can be increased via ${formatUtils.pretty(configuration, `httpRetry`, formatUtils.Type.SETTING)})`),
+        })}`);
+      }
+    });
+
+    networkError.originalError = err;
+    throw networkError;
+  }
+}
+
+/**
+ * Searches through networkSettings and returns the most specific match
+ */
+export function getNetworkSettings(target: string | URL, opts: { configuration: Configuration }) {
+  // Sort the config by key length to match on the most specific pattern
+  const networkSettings = [...opts.configuration.get(`networkSettings`)].sort(([keyA], [keyB]) => {
+    return keyB.length - keyA.length;
+  });
+
+  type NetworkSettingsType = MapValueToObjectValue<MapValue<ConfigurationValueMap['networkSettings']>>;
+  type UndefinableSettings = { [P in keyof NetworkSettingsType]: NetworkSettingsType[P] | undefined; };
+
+  const mergedNetworkSettings: UndefinableSettings = {
+    enableNetwork: undefined,
+    caFilePath: undefined,
+    httpProxy: undefined,
+    httpsProxy: undefined,
+  };
+
+  const mergableKeys = Object.keys(mergedNetworkSettings) as Array<keyof NetworkSettingsType>;
+
+  const url = typeof target === `string` ? new URL(target) : target;
+  for (const [glob, config] of networkSettings) {
+    if (micromatch.isMatch(url.hostname, glob)) {
+      for (const key of mergableKeys) {
+        const setting = config.get(key);
+        if (setting !== null && typeof mergedNetworkSettings[key] === `undefined`) {
+          mergedNetworkSettings[key] = setting as any;
+        }
+      }
+    }
+  }
+
+  // Apply defaults
+  for (const key of mergableKeys)
+    if (typeof mergedNetworkSettings[key] === `undefined`)
+      mergedNetworkSettings[key] = opts.configuration.get(key) as any;
+
+  return mergedNetworkSettings as NetworkSettingsType;
+}
+
 export type Body = (
   {[key: string]: any} |
   string |
@@ -30,99 +156,114 @@ export type Body = (
 );
 
 export enum Method {
-  GET = 'GET',
-  PUT = 'PUT',
-};
+  GET = `GET`,
+  PUT = `PUT`,
+  POST = `POST`,
+  DELETE = `DELETE`,
+}
 
 export type Options = {
   configuration: Configuration,
+  customErrorMessage?: (err: RequestError) => string | null;
   headers?: {[headerName: string]: string};
-  json?: boolean,
+  jsonRequest?: boolean,
+  jsonResponse?: boolean,
   method?: Method,
 };
 
-export async function request(target: string, body: Body, {configuration, headers, json, method = Method.GET}: Options) {
-  if (!configuration.get(`enableNetwork`))
-    throw new Error(`Network access have been disabled by configuration (${method} ${target})`);
+export async function request(target: string | URL, body: Body, {configuration, headers, jsonRequest, jsonResponse, method = Method.GET}: Omit<Options, 'customErrorMessage'>) {
+  const url = typeof target === `string` ? new URL(target) : target;
 
-  const url = new URL(target);
+  const networkConfig = getNetworkSettings(url, {configuration});
+  if (networkConfig.enableNetwork === false)
+    throw new Error(`Request to '${url.href}' has been blocked because of your configuration settings`);
+
   if (url.protocol === `http:` && !micromatch.isMatch(url.hostname, configuration.get(`unsafeHttpWhitelist`)))
     throw new Error(`Unsafe http requests must be explicitly whitelisted in your configuration (${url.hostname})`);
 
-  let agent;
+  const agent = {
+    http: networkConfig.httpProxy
+      ? tunnel.httpOverHttp(parseProxy(networkConfig.httpProxy))
+      : globalHttpAgent,
+    https: networkConfig.httpsProxy
+      ? tunnel.httpsOverHttp(parseProxy(networkConfig.httpsProxy)) as HttpsAgent
+      : globalHttpsAgent,
+  };
 
-  const httpProxy = configuration.get(`httpProxy`);
-  const httpsProxy = configuration.get(`httpsProxy`);
-
-  if (url.protocol === `http:`)
-    agent = httpProxy
-      ? tunnel.httpOverHttp(parseProxy(httpProxy))
-      : globalHttpAgent;
-
-  if (url.protocol === `https:`)
-    agent = httpsProxy
-      ? tunnel.httpsOverHttp(parseProxy(httpsProxy))
-      : globalHttpsAgent;
-
-  const gotOptions: GotOptions = {agent, headers, method};
-  let hostname: string | undefined;
-
-  gotOptions.responseType = json
+  const gotOptions: ExtendOptions = {agent, headers, method};
+  gotOptions.responseType = jsonResponse
     ? `json`
     : `buffer`;
 
   if (body !== null) {
-    if (typeof body === `string` || Buffer.isBuffer(body)) {
+    if (Buffer.isBuffer(body) || (!jsonRequest && typeof body === `string`)) {
       gotOptions.body = body;
     } else {
+      // @ts-expect-error: The got types only allow an object, but got can stringify any valid JSON
       gotOptions.json = body;
     }
   }
 
-  const makeHooks = () => ({
-    beforeRequest: [
-      (options: NormalizedOptions) => {
-        hostname = options.url.hostname;
-      },
-    ],
-    beforeRedirect: [
-      (options: NormalizedOptions) => {
-        if (options.headers && options.headers.authorization && options.url.hostname !== hostname) {
-          delete options.headers.authorization;
-        }
-      },
-    ],
-  });
+  const socketTimeout = configuration.get(`httpTimeout`);
+  const retry = configuration.get(`httpRetry`);
+  const rejectUnauthorized = configuration.get(`enableStrictSsl`);
+  const caFilePath = networkConfig.caFilePath;
 
-  //@ts-ignore
+  const {default: got} = await import(`got`);
+
+  const certificateAuthority = caFilePath
+    ? await getCachedCertificate(caFilePath)
+    : undefined;
+
   const gotClient = got.extend({
-    retry: 10,
+    timeout: {
+      socket: socketTimeout,
+    },
+    retry,
+    https: {
+      rejectUnauthorized,
+      certificateAuthority,
+    },
     ...gotOptions,
-    hooks: makeHooks(),
   });
 
-  return gotClient(target) as unknown as Response<any>;
+  return configuration.getLimit(`networkConcurrency`)(() => {
+    return gotClient(url) as unknown as Response<any>;
+  });
 }
 
-export async function get(target: string, {configuration, json, ...rest}: Options) {
-  let entry = cache.get(target);
+export async function get(target: string, {configuration, jsonResponse, ...rest}: Options) {
+  let entry = miscUtils.getFactoryWithDefault(cache, target, () => {
+    return prettyNetworkError(request(target, null, {configuration, ...rest}), {configuration}).then(response => {
+      cache.set(target, response.body);
+      return response.body;
+    });
+  });
 
-  if (!entry) {
-    entry = request(target, null, {configuration, ...rest});
-    cache.set(target, entry);
-  }
+  if (Buffer.isBuffer(entry) === false)
+    entry = await entry;
 
-  const response = await entry;
-
-  if (json) {
-    return JSON.parse(response.body.toString());
+  if (jsonResponse) {
+    return JSON.parse(entry.toString());
   } else {
-    return response.body;
+    return entry;
   }
 }
 
-export async function put(target: string, body: Body, options: Options): Promise<Buffer> {
-  const response = await request(target, body, {...options, method: Method.PUT});
+export async function put(target: string, body: Body, {customErrorMessage, ...options}: Options): Promise<Buffer> {
+  const response = await prettyNetworkError(request(target, body, {...options, method: Method.PUT}), options);
+
+  return response.body;
+}
+
+export async function post(target: string, body: Body, {customErrorMessage, ...options}: Options): Promise<Buffer> {
+  const response = await prettyNetworkError(request(target, body, {...options, method: Method.POST}), options);
+
+  return response.body;
+}
+
+export async function del(target: string, {customErrorMessage, ...options}: Options): Promise<Buffer> {
+  const response = await prettyNetworkError(request(target, null, {...options, method: Method.DELETE}), options);
 
   return response.body;
 }

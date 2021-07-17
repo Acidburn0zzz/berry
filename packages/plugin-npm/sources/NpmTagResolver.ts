@@ -1,12 +1,10 @@
-import {ReportError, MessageName, Resolver, ResolveOptions, MinimalResolveOptions} from '@yarnpkg/core';
-import {structUtils}                                                               from '@yarnpkg/core';
-import {Descriptor, Locator, Package}                                              from '@yarnpkg/core';
+import {ReportError, MessageName, Resolver, ResolveOptions, MinimalResolveOptions, TAG_REGEXP} from '@yarnpkg/core';
+import {structUtils}                                                                           from '@yarnpkg/core';
+import {Descriptor, Locator, Package}                                                          from '@yarnpkg/core';
 
-import {NpmSemverFetcher}                                                          from './NpmSemverFetcher';
-import {PROTOCOL}                                                                  from './constants';
-import * as npmHttpUtils                                                           from './npmHttpUtils';
-
-export const TAG_REGEXP = /^[a-z]+$/;
+import {NpmSemverFetcher}                                                                      from './NpmSemverFetcher';
+import {PROTOCOL}                                                                              from './constants';
+import * as npmHttpUtils                                                                       from './npmHttpUtils';
 
 export class NpmTagResolver implements Resolver {
   supportsDescriptor(descriptor: Descriptor, opts: MinimalResolveOptions) {
@@ -43,7 +41,7 @@ export class NpmTagResolver implements Resolver {
     const registryData = await npmHttpUtils.get(npmHttpUtils.getIdentUrl(descriptor), {
       configuration: opts.project.configuration,
       ident: descriptor,
-      json: true,
+      jsonResponse: true,
     });
 
     if (!Object.prototype.hasOwnProperty.call(registryData, `dist-tags`))
@@ -64,6 +62,11 @@ export class NpmTagResolver implements Resolver {
     } else {
       return [structUtils.bindLocator(versionLocator, {__archiveUrl: archiveUrl})];
     }
+  }
+
+  async getSatisfying(descriptor: Descriptor, references: Array<string>, opts: ResolveOptions) {
+    // We can't statically know if a tag resolves to a specific version without using the network
+    return null;
   }
 
   async resolve(locator: Locator, opts: ResolveOptions): Promise<Package> {

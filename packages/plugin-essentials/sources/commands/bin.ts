@@ -1,18 +1,13 @@
-import {BaseCommand}                                       from '@yarnpkg/cli';
-import {Configuration, Project, ThrowReport, StreamReport} from '@yarnpkg/core';
-import {scriptUtils, structUtils}                          from '@yarnpkg/core';
-import {Command, Usage, UsageError}                        from 'clipanion';
+import {BaseCommand}                          from '@yarnpkg/cli';
+import {Configuration, Project, StreamReport} from '@yarnpkg/core';
+import {scriptUtils, structUtils}             from '@yarnpkg/core';
+import {Command, Option, Usage, UsageError}   from 'clipanion';
 
 // eslint-disable-next-line arca/no-default-export
 export default class BinCommand extends BaseCommand {
-  @Command.String({required: false})
-  name?: string;
-
-  @Command.Boolean(`-v,--verbose`)
-  verbose: boolean = false;
-
-  @Command.Boolean(`--json`)
-  json: boolean = false;
+  static paths = [
+    [`bin`],
+  ];
 
   static usage: Usage = Command.Usage({
     description: `get the path to a binary script`,
@@ -20,8 +15,6 @@ export default class BinCommand extends BaseCommand {
       When used without arguments, this command will print the list of all the binaries available in the current workspace. Adding the \`-v,--verbose\` flag will cause the output to contain both the binary name and the locator of the package that provides the binary.
 
       When an argument is specified, this command will just print the path to the binary on the standard output and exit. Note that the reported path may be stored within a zip archive.
-
-      If the \`--json\` flag is set the output will follow a JSON-stream output also known as NDJSON (https://github.com/ndjson/ndjson-spec).
     `,
     examples: [[
       `List all the available binaries`,
@@ -32,15 +25,21 @@ export default class BinCommand extends BaseCommand {
     ]],
   });
 
-  @Command.Path(`bin`)
+  verbose = Option.Boolean(`-v,--verbose`, false, {
+    description: `Print both the binary name and the locator of the package that provides the binary`,
+  });
+
+  json = Option.Boolean(`--json`, false, {
+    description: `Format the output as an NDJSON stream`,
+  });
+
+  name = Option.String({required: false});
+
   async execute() {
     const configuration = await Configuration.find(this.context.cwd, this.context.plugins);
     const {project, locator} = await Project.find(configuration, this.context.cwd);
 
-    await project.resolveEverything({
-      lockfileOnly: true,
-      report: new ThrowReport(),
-    });
+    await project.restoreInstallState();
 
     if (this.name) {
       const binaries = await scriptUtils.getPackageAccessibleBinaries(locator, {project});

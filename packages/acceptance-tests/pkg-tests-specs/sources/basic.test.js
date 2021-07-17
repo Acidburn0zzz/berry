@@ -1,8 +1,23 @@
+const {xfs} = require(`@yarnpkg/fslib`);
 const {
   tests: {getPackageArchivePath, getPackageHttpArchivePath, getPackageDirectoryPath},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 describe(`Basic tests`, () => {
+  test(
+    `it should correctly handle browser fields in package.json`,
+    makeTemporaryEnv(
+      {
+        dependencies: {[`no-deps-browser-field`]: `1.0.0`},
+      },
+      async ({path, run, source}) => {
+        await run(`install`);
+        await expect(source(`require('no-deps-browser-field')`)).resolves.toMatchObject({
+          './index.js': `./index.js`,
+        });
+      },
+    ),
+  );
   test(
     `it should correctly install a single dependency that contains no sub-dependencies`,
     makeTemporaryEnv(
@@ -372,5 +387,63 @@ describe(`Basic tests`, () => {
         });
       },
     ),
+  );
+
+  test(
+    `it should allow accessing a package via too many slashes`,
+    makeTemporaryEnv(
+      {
+        dependencies: {[`various-requires`]: `1.0.0`},
+      },
+      async ({path, run, source}) => {
+        await run(`install`);
+
+        await expect(source(`require('various-requires//self')`)).resolves.toMatchObject({
+          name: `various-requires`,
+          version: `1.0.0`,
+        });
+      },
+    ),
+  );
+
+  test(
+    `it should fallback to dependencies if the parent doesn't provide the peer dependency`,
+    makeTemporaryEnv(
+      {},
+      {
+        nodeLinker: `node-modules`,
+      },
+      async ({path, run, source}) => {
+        await xfs.mkdirPromise(`${path}/lib-2`);
+        await xfs.writeJsonPromise(`${path}/lib-2/package.json`, {
+          dependencies: {
+            'no-deps': `*`,
+          },
+          peerDependencies: {
+            'no-deps': `*`,
+          },
+        });
+
+        await xfs.mkdirPromise(`${path}/lib-1`);
+        await xfs.writeJsonPromise(`${path}/lib-1/package.json`, {
+          dependencies: {
+            'lib-2': `portal:${path}/lib-2`,
+          },
+          peerDependencies: {
+            'no-deps': `*`,
+          },
+        });
+
+        await xfs.writeJsonPromise(`${path}/package.json`, {
+          dependencies: {
+            'lib-1': `portal:${path}/lib-1`,
+          },
+        });
+
+        await run(`install`);
+
+        await expect(xfs.existsPromise(`${path}/node_modules/no-deps`)).resolves.toEqual(true);
+      }
+    )
   );
 });

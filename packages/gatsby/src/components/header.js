@@ -1,36 +1,46 @@
-import styled                                      from '@emotion/styled';
-import {Link, graphql, useStaticQuery, withPrefix} from 'gatsby';
-import PropTypes                                   from 'prop-types';
-import React, {useState}                           from 'react';
+import styled                                              from '@emotion/styled';
+import discordIcon                                         from '@iconify/icons-logos/discord';
+import githubIcon                                          from '@iconify/icons-logos/github-icon';
+import {InlineIcon}                                        from '@iconify/react';
+import {Link, graphql, useStaticQuery, withPrefix}         from 'gatsby';
+import PropTypes                                           from 'prop-types';
+import React, {useLayoutEffect, useMemo, useRef, useState} from 'react';
 
-import {Logo}                                      from './logo';
-import {ifDesktop, ifMobile}                       from './responsive';
+import {Logo}                                              from './logo';
+import {ifDesktop, ifMobile}                               from './responsive';
 
 const HeaderContainer = styled.div`
   ${ifDesktop} {
     position: sticky;
     top: 0;
     z-index: 1;
+    border-bottom: var(--header-border-bottom);
   }
 `;
 
 const NewsContainer = styled.div`
   position: relative;
 
+  height: 40px;
+
   padding: 0 1em;
 
   text-decoration: none;
-  line-height: 2.5em;
+  line-height: 40px;
 
   ${ifMobile} {
+    height: auto;
+
     white-space: pre-wrap;
-    line-height: 1.5em;
     text-align: center;
-    padding-top: 5px;
   }
 
   background: #2188b6;
   color: rgba(255, 255, 255, 0.8);
+`;
+
+const NewsLine = styled.div`
+  display: inline-block;
 `;
 
 const NewsOverlay = styled.a`
@@ -50,8 +60,6 @@ const NewsInner = styled.div`
 
   a {
     display: inline-block;
-
-    line-height: 2.5em;
 
     pointer-events: all;
 
@@ -148,6 +156,64 @@ const MenuNavigation = styled.div`
   }
 `;
 
+const MenuSearchBox = styled.div`
+  display: none;
+
+  margin-left: auto;
+  margin-right: 0;
+
+  flex: 1;
+
+  padding: 0 1em;
+
+  ${props => props.onlyIf()} {
+    display: flex;
+  }
+
+  ${ifMobile} {
+    width: 100%;
+  }
+
+  > * {
+    display: flex;
+
+    margin: auto 0.5em;
+  }
+
+  > :first-child {
+    margin-left: auto;
+  }
+
+  > :last-child {
+    margin-right: 0;
+  }
+
+  .algolia-autocomplete {
+    display: flex !important;
+
+    flex: 1;
+  }
+
+  .docsearch-desktop, .docsearch-mobile {
+    margin-left: auto;
+    margin-right: 0;
+
+    width: 100%;
+    max-width: 300px;
+    height: 3em;
+
+    border: 1px solid lightgrey;
+
+    padding: 0 1em;
+
+    font-size: 1em;
+  }
+`;
+
+const SearchParent = styled.div`
+  flex: 1;
+`;
+
 const MenuEntry = styled.div`
   ${ifDesktop} {
     &:hover {
@@ -158,7 +224,7 @@ const MenuEntry = styled.div`
     display: flex;
     align-items: center;
 
-    height: 4rem;
+    height: 60px;
 
     border: 4px solid transparent;
 
@@ -173,6 +239,8 @@ const MenuEntry = styled.div`
     ${ifDesktop} {
       &.active {
         border-bottom-color: #2188b6;
+        font-weight: 600;
+        color: rgb(0, 122, 162);
       }
     }
 
@@ -183,8 +251,8 @@ const MenuEntry = styled.div`
 `;
 
 const isActive = ({href, location}) => {
-  const homeUrl = withPrefix('/');
-  const packageInfoUrl = withPrefix('/package/');
+  const homeUrl = withPrefix(`/`);
+  const packageInfoUrl = withPrefix(`/package/`);
 
   // Make all menu links (except home) active when itself or deeper routes are be current
   const isMenuLinkActive = href !== homeUrl && location.pathname.startsWith(href);
@@ -193,8 +261,28 @@ const isActive = ({href, location}) => {
   const isHomeMenuLinkActive = href === homeUrl
       && [homeUrl, packageInfoUrl].includes(location.pathname);
 
-  return isMenuLinkActive || isHomeMenuLinkActive ? {className: 'active'} : null;
+  return isMenuLinkActive || isHomeMenuLinkActive ? {className: `active`} : null;
 };
+
+const SearchContainer = ({className}) => {
+  const el = useMemo(() => {
+    if (typeof document === `undefined`) return;
+    const input = document.createElement(`input`);
+    input.className = className;
+    input.placeholder = `Search the documentation`;
+    return input;
+  }, []);
+
+  const ref = useRef(null);
+
+  useLayoutEffect(() => {
+    if (ref.current === null) return;
+    ref.current.appendChild(el);
+  }, [ref.current]);
+
+  return <SearchParent ref={ref} />;
+};
+
 
 export const Header = ({children}) => {
   const data = useStaticQuery(graphql`
@@ -218,9 +306,9 @@ export const Header = ({children}) => {
   return <>
     <HeaderContainer>
       <NewsContainer>
-        <NewsOverlay href={`https://github.com/yarnpkg/berry`} />
+        <NewsOverlay href={`https://classic.yarnpkg.com`}/>
         <NewsInner>
-          <Highlight>Important:</Highlight> This documentation covers Yarn 2. For the 1.x doc, check <a href={`https://classic.yarnpkg.com`}>classic.yarnpkg.com</a>.
+          <NewsLine><Highlight>Important:</Highlight> This documentation covers Yarn 2.</NewsLine> <NewsLine>For 1.x docs, see classic.yarnpkg.com.</NewsLine>
         </NewsInner>
       </NewsContainer>
 
@@ -229,6 +317,9 @@ export const Header = ({children}) => {
           <MenuLogo to={`/`}>
             <Logo height={`3em`} align={`middle`} />
           </MenuLogo>
+          <MenuSearchBox onlyIf={ifMobile}>
+            <SearchContainer className={`docsearch-mobile`} />
+          </MenuSearchBox>
           <MenuToggle onClick={() => setExpanded(!expanded)}>
             {expanded ? `×` : `≡`}
           </MenuToggle>
@@ -243,6 +334,16 @@ export const Header = ({children}) => {
             </MenuEntry>
           </React.Fragment>)}
         </MenuNavigation>
+
+        <MenuSearchBox onlyIf={ifDesktop}>
+          <SearchContainer className={`docsearch-desktop`} />
+          <a href={`https://github.com/yarnpkg/berry`}>
+            <InlineIcon icon={githubIcon} height={25}/>
+          </a>
+          <a href={`https://discord.com/invite/yarnpkg`}>
+            <InlineIcon icon={discordIcon} height={25}/>
+          </a>
+        </MenuSearchBox>
       </MenuContainer>
       {children}
     </HeaderContainer>

@@ -64,6 +64,9 @@ public
 # Yarn
 yarn-error.log
 .pnp/
-.pnp.js
+.pnp.cjs
 # Yarn Integrity file
 .yarn-integrity
+
+# Static API Folder
+static/api

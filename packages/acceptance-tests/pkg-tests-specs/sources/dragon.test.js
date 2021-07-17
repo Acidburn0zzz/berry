@@ -1,8 +1,8 @@
-import {xfs} from '@yarnpkg/fslib';
+import {xfs, npath, ppath} from '@yarnpkg/fslib';
 
 const {
   fs: {writeFile, writeJson},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 // Here be dragons. The biggest and baddest tests, that just can't be described in a single line of summary. Because
 // of this, they each must be clearly documented and explained.
@@ -226,7 +226,7 @@ describe(`Dragon tests`, () => {
         //     care about too much (except that X has a peer dep on Y).
         //
         //   - Since A has a peer dependency, two different instances of it
-        //     exist: one as an independant workspace, and another as a
+        //     exist: one as an independent workspace, and another as a
         //     dependency of B. This is critical because otherwise Yarn will
         //     just skip the second traversal of A (since we know its
         //     dependencies have already been virtualized).
@@ -348,6 +348,202 @@ describe(`Dragon tests`, () => {
 
         await run(`install`);
       },
+    ),
+  );
+
+  test(`it should pass the dragon test 7`,
+    makeTemporaryEnv(
+      {
+        private: true,
+        dependencies: {
+          [`dragon-test-7-a`]: `1.0.0`,
+          [`dragon-test-7-d`]: `1.0.0`,
+          [`dragon-test-7-b`]: `2.0.0`,
+          [`dragon-test-7-c`]: `3.0.0`,
+        },
+      },
+      async ({path, run, source}) => {
+        // node-modules linker should support hoisting the same package in different places of the tree in different ways
+        //
+        // . -> A -> B@X -> C@X
+        //        -> C@Y
+        //   -> D -> B@X -> C@X
+        //   -> B@Y
+        //   -> C@Z
+        // should be hoisted to:
+        // . -> A -> B@X -> C@X
+        //        -> C@Y
+        //   -> D -> B@X
+        //        -> C@X
+        //   -> B@Y
+        //   -> C@Z
+        //
+        // Two B@X instances should be hoisted differently in the tree
+        await writeFile(npath.toPortablePath(`${path}/.yarnrc.yml`), `
+          nodeLinker: "node-modules"
+        `);
+
+        await expect(run(`install`)).resolves.toBeTruthy();
+
+        // All fixtures export/reexport `dragon-test-7-c` version, we expect that version 1.0.0 will be used by both `dragon-test-7-b` instances
+        await expect(source(`require('dragon-test-7-a') + ':' + require('dragon-test-7-d')`)).resolves.toEqual(`1.0.0:1.0.0`);
+
+        // C@X should not be hoisted from . -> A -> B@X
+        await expect(xfs.existsPromise(`${path}/node_modules/dragon-test-7-a/node_modules/dragon-test-7-b/node_modules/dragon-test-7-c`)).resolves.toBeTruthy();
+        // C@X should be hoisted from . -> D -> B@X
+        await expect(xfs.existsPromise(`${path}/node_modules/dragon-test-7-d/node_modules/dragon-test-7-b/node_modules`)).resolves.toBeFalsy();
+      }
+    ),
+  );
+
+  test(`it should pass the dragon test 8`,
+    makeTemporaryEnv(
+      {
+        private: true,
+        dependencies: {
+          [`dragon-test-8-a`]: `1.0.0`,
+          [`dragon-test-8-b`]: `1.0.0`,
+          [`dragon-test-8-c`]: `1.0.0`,
+          [`dragon-test-8-d`]: `1.0.0`,
+        },
+      },
+      async ({path, run, source}) => {
+        // We want to deduplicate all the virtual instances as long as their
+        // effective dependencies are the same. However, in order to do that,
+        // we need to run the deduping recursively since deduping one package
+        // may lead to others being candidates for deduping.
+        //
+        // Reproducing the edge case we ran into is a bit tricky and heavily
+        // connected to our own algorithm. We need the following tree:
+        //
+        // . -> A -> B --> C
+        //             --> D
+        //        -> C
+        //        -> D --> C
+        //   -> B --> C
+        //        --> D
+        //   -> C
+        //   -> D --> C
+        //
+        // In this situation, the Yarn resolution will first traverse and
+        // register A, B, C, D. B and D will both get virtual instances. Then
+        // the traversal will leave the A branch and iterate on the remaining
+        // nodes in B, C, D. At this point B will still reference the
+        // non-deduplicated version of D (since we haven't traversed the second
+        // node yet), so the algorithm will leave it as it is. It's only once
+        // we keep iterating that D is deduplicated and thus we can deduplicate
+        // B as well.
+        //
+        // Note that this is also very dependent on the package names. If B was
+        // called E, this case wouldn't happen because D would be deduplicated
+        // first.
+
+        await expect(run(`install`)).resolves.toBeTruthy();
+
+        await expect(source(`require('dragon-test-8-a').dependencies['dragon-test-8-b'] === require('dragon-test-8-b')`)).resolves.toEqual(true);
+      }
+    ),
+  );
+
+  test(`it should pass the dragon test 9`,
+    makeTemporaryEnv(
+      {
+        private: true,
+        dependencies: {
+          [`first`]: `npm:peer-deps@1.0.0`,
+          [`second`]: `npm:peer-deps@1.0.0`,
+          [`no-deps`]: `1.0.0`,
+        },
+      },
+      async ({path, run, source}) => {
+        // We don't want to dedupe virtual descriptors with different
+        // base idents being resolved to the same virtual package.
+        // We should instead preserve the different descriptors and
+        // only dedupe the virtual package they both resolve to.
+
+        // Reproducing this edge case requires the following tree,
+        // where `first` and `second` resolve to the same package.
+        //
+        // . -> first --> no-deps
+        //   -> second --> no-deps
+        //   -> no-deps
+        //
+        // The way it should work:
+        // - storedDescriptors should contain `first`, `second`, virtualized `first`, virtualized `second`
+        // - storedPackages should contain both the original and the virtualized package these descriptors resolve to
+        //
+        // The way it worked before:
+        // - storedDescriptors only contained `first` and virtualized `first`
+        // - storedPackages contained both the original and the virtualized package `first` resolved to
+        //
+        // Basically, it worked nearly the same way before, except for the fact
+        // that the virtual resolution algorithm deduped `second` out of existence.
+        //
+        // Issue: https://github.com/yarnpkg/berry/issues/1352
+
+        await expect(run(`install`)).resolves.toBeTruthy();
+
+        // The virtual descriptors should be different but the virtual package should be the same
+        await expect(source(`require('first') === require('second')`)).resolves.toEqual(true);
+      }
+    ),
+  );
+
+  test(`it should pass the dragon test 10`,
+    makeTemporaryEnv(
+      {
+        private: true,
+        workspaces: [
+          `packages/*`,
+        ],
+      },
+      async ({path, run, source}) => {
+        // We've hit an interesting pattern - while the parameters aren't
+        // entirely understood, the gist is that because workspaces have
+        // multiple 'perspectives' (depending on whether they are accessed
+        // via their top-level or as dependencies of another workspace), their
+        // dependencies that peer-depend on them cannot be deduped as easily as
+        // others (otherwise we end up overwriting the resolution in some very
+        // weird ways).
+
+        // PR: https://github.com/yarnpkg/berry/pull/2568
+
+        await xfs.mkdirpPromise(`${path}/packages/a`);
+        await xfs.writeJsonPromise(`${path}/packages/a/package.json`, {
+          name: `a`,
+          devDependencies: {
+            [`b`]: `workspace:*`,
+          },
+        });
+
+        await xfs.mkdirpPromise(`${path}/packages/b`);
+        await xfs.writeJsonPromise(`${path}/packages/b/package.json`, {
+          name: `b`,
+          peerDependencies: {
+            [`c`]: `*`,
+          },
+          devDependencies: {
+            [`c`]: `workspace:*`,
+          },
+        });
+
+        await xfs.mkdirpPromise(`${path}/packages/c`);
+        await xfs.writeJsonPromise(`${path}/packages/c/package.json`, {
+          name: `c`,
+          peerDependencies: {
+            [`anything`]: `*`,
+          },
+          dependencies: {
+            [`b`]: `workspace:*`,
+          },
+        });
+
+        await expect(run(`install`)).resolves.toBeTruthy();
+
+        // The virtual descriptors should be different but the virtual package should be the same
+        const cPath = npath.fromPortablePath(ppath.join(path, `packages/c/package.json`));
+        await expect(source(`(createRequire = require('module').createRequire, createRequire(createRequire(${JSON.stringify(cPath)}).resolve('b/package.json')).resolve('c/package.json'))`)).resolves.toEqual(cPath);
+      }
     ),
   );
 });

@@ -3,6 +3,10 @@
 set -e
 
 EMSDK_ENV=~/emsdk/emsdk_env.sh
+EMSDK_VERSION=2.0.22
+
+~/emsdk/emsdk install $EMSDK_VERSION
+~/emsdk/emsdk activate $EMSDK_VERSION
 
 THIS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$THIS_DIR"
@@ -41,9 +45,9 @@ LIBZIP_REPO=arcanis/libzip
 )
 
 [[ -f ./libzip-"$LIBZIP_VERSION"/build/lib/libzip.a ]] || (
-  if [[ -v LIBZIP_REPO ]]; then
+  if [[ -n "$LIBZIP_REPO" ]]; then
     if ! [[ -e libzip-"$LIBZIP_VERSION" ]]; then
-      git clone git@github.com:"$LIBZIP_REPO" libzip-"$LIBZIP_VERSION"
+      git clone https://github.com/"$LIBZIP_REPO" libzip-"$LIBZIP_VERSION"
     fi
   else
     if ! [[ -e libzip-"$LIBZIP_VERSION".tar.gz ]]; then
@@ -93,15 +97,16 @@ build() {
     -o ./build.js \
     -s WASM=1 \
     -s EXPORTED_FUNCTIONS="$(cat ./exported.json)" \
-    -s EXTRA_EXPORTED_RUNTIME_METHODS='["cwrap", "getValue"]' \
+    -s EXPORTED_RUNTIME_METHODS='["cwrap", "getValue"]' \
     -s ALLOW_MEMORY_GROWTH=1 \
     -s ENVIRONMENT=node \
     -s NODERAWFS=1 \
     -s SINGLE_FILE=1 \
+    -s NODEJS_CATCH_EXIT=0 \
+    -s NODEJS_CATCH_REJECTION=0 \
     "$@" \
     -I./libzip-"$LIBZIP_VERSION"/build/local/include \
     -O3 \
-    --llvm-lto 1 \
     ./zipstruct.c \
     ./libzip-"$LIBZIP_VERSION"/build/local/lib/libzip.a \
     ./zlib-"$ZLIB_VERSION"/build/local/lib/libz.a
@@ -109,7 +114,6 @@ build() {
   cat > ../sources/"$name".js \
     <(echo "var frozenFs = Object.assign({}, require('fs'));") \
     <(sed 's/require("fs")/frozenFs/g' ./build.js \
-    | sed 's/process\["on"\]/(function(){})/g' \
     | sed 's/process\["binding"\]("constants")/({"fs":fs.constants})/g')
 
   yarn prettier --write ../sources/"$name".js

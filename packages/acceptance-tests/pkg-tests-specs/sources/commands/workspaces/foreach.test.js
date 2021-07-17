@@ -1,6 +1,6 @@
 const {
   fs: {writeJson, writeFile},
-} = require('pkg-tests-core');
+} = require(`pkg-tests-core`);
 
 async function setupWorkspaces(path) {
   await writeFile(`${path}/mutexes/workspace-a`, ``);
@@ -15,6 +15,7 @@ async function setupWorkspaces(path) {
     scripts: {
       print: `echo Test Workspace A`,
       start: `node server.js`,
+      testExit: `exit 0`,
     },
   });
 
@@ -25,6 +26,7 @@ async function setupWorkspaces(path) {
     scripts: {
       print: `echo Test Workspace B`,
       start: `node client.js`,
+      testExit: `exit 1`,
     },
     dependencies: {
       [`workspace-a`]: `workspace:*`,
@@ -82,7 +84,7 @@ async function setupWorkspaces(path) {
 describe(`Commands`, () => {
   describe(`workspace foreach`, () => {
     test(
-      `should run on child workspaces by default`,
+      `should run on current and descendant workspaces by default`,
       makeTemporaryEnv(
         {
           private: true,
@@ -308,7 +310,8 @@ describe(`Commands`, () => {
       )
     );
 
-    test(
+    // Clipanion doesn't support this yet
+    test.skip(
       `should throw an error when using --jobs without --parallel`,
       makeTemporaryEnv(
         {
@@ -335,7 +338,7 @@ describe(`Commands`, () => {
           await setupWorkspaces(path);
 
           await run(`install`);
-          await expect(run(`workspaces`, `foreach`, `--parallel`, `--jobs`, `1`, `run`, `print`)).rejects.toThrowError(/jobs must be greater/);
+          await expect(run(`workspaces`, `foreach`, `--parallel`, `--jobs`, `1`, `run`, `print`)).rejects.toThrowError(/expected to be at least 2 \(got 1\)/);
         }
       )
     );
@@ -388,6 +391,114 @@ describe(`Commands`, () => {
         await expect({code, stdout, stderr}).toMatchSnapshot();
       }
     ));
+
+    test(
+      `should return correct exit code when encountered errors in running scripts`,
+      makeTemporaryEnv(
+        {
+          private: true,
+          workspaces: [`packages/*`],
+        },
+        async ({path, run}) => {
+          await setupWorkspaces(path);
+
+          let code;
+          try {
+            await run(`install`);
+            ({code} = await run(`workspaces`, `foreach`, `run`, `testExit`));
+          } catch (error) {
+            ({code} = error);
+          }
+
+          expect(code).toBe(1);
+        }
+      )
+    );
+
+    test(
+      `should run execute global scripts even on workspaces that don't declare them`,
+      makeTemporaryEnv(
+        {
+          private: true,
+          workspaces: [`packages/*`],
+          scripts: {
+            [`test:colon`]: `echo One execution`,
+          },
+        },
+        async ({path, run}) => {
+          await setupWorkspaces(path);
+
+          let code;
+          let stdout;
+          let stderr;
+
+          try {
+            await run(`install`);
+            ({code, stdout, stderr} = await run(`workspaces`, `foreach`, `--topological`, `run`, `test:colon`));
+          } catch (error) {
+            ({code, stdout, stderr} = error);
+          }
+
+          await expect({code, stdout, stderr}).toMatchSnapshot();
+        }
+      )
+    );
+
+    test(
+      `should run set INIT_CWD to each individual workspace cwd even with global scripts`,
+      makeTemporaryEnv(
+        {
+          private: true,
+          workspaces: [`packages/*`],
+          scripts: {
+            [`test:foo`]: `yarn workspaces foreach run test:bar`,
+            [`test:bar`]: `node -p 'require("path").relative(process.cwd(), process.argv[1]).replace(/\\\\\\\\/g, "/")' "$INIT_CWD"`,
+          },
+        },
+        async ({path, run}) => {
+          await setupWorkspaces(path);
+
+          let code;
+          let stdout;
+          let stderr;
+
+          try {
+            await run(`install`);
+            ({code, stdout, stderr} = await run(`test:foo`));
+          } catch (error) {
+            ({code, stdout, stderr} = error);
+          }
+
+          await expect({code, stdout, stderr}).toMatchSnapshot();
+        }
+      )
+    );
+
+    test(
+      `should include dependencies if using --recursive`,
+      makeTemporaryEnv(
+        {
+          private: true,
+          workspaces: [`packages/*`],
+        },
+        async ({path, run}) => {
+          await setupWorkspaces(path);
+
+          let code;
+          let stdout;
+          let stderr;
+
+          try {
+            await run(`install`);
+            ({code, stdout, stderr} = await run(`workspaces`, `foreach`, `--recursive`, `--topological`, `run`, `print`, {cwd: `${path}/packages/workspace-b`}));
+          } catch (error) {
+            ({code, stdout, stderr} = error);
+          }
+
+          await expect({code, stdout, stderr}).toMatchSnapshot();
+        }
+      )
+    );
   });
 });
 

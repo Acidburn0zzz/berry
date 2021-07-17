@@ -1,6 +1,7 @@
 const {
   fs: {readJson, writeJson},
-} = require('pkg-tests-core');
+  yarn: {readManifest},
+} = require(`pkg-tests-core`);
 
 describe(`Commands`, () => {
   describe(`remove`, () => {
@@ -106,7 +107,7 @@ describe(`Commands`, () => {
     );
 
     test(
-      `it should remove all the occurences of the specified dependency when using -A`,
+      `it should remove all the occurrences of the specified dependency when using -A`,
       makeTemporaryEnv({
         private: true,
         workspaces: [
@@ -139,6 +140,64 @@ describe(`Commands`, () => {
         await expect(readJson(`${path}/packages/workspace-a/package.json`)).resolves.not.toHaveProperty(`dependencies`);
         await expect(readJson(`${path}/packages/workspace-b/package.json`)).resolves.not.toHaveProperty(`dependencies`);
         await expect(readJson(`${path}/packages/workspace-c/package.json`)).resolves.not.toHaveProperty(`dependencies`);
+      }),
+    );
+
+    test(
+      `it should remove all dependencies matching a glob pattern (scope & star)`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`@types/iarna__toml`]: `1.0.0`,
+          [`@types/is-number`]: `1.0.0`,
+          [`@types/no-deps`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        await run(`remove`, `@types/*`);
+
+        await expect(readManifest(path)).resolves.not.toHaveProperty(`dependencies`);
+      }),
+    );
+
+    test(
+      `it should remove all dependencies matching a glob pattern (star)`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`dep-loop-entry`]: `1.0.0`,
+          [`dep-loop-exit`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        await run(`remove`, `dep-loop-*`);
+
+        await expect(readManifest(path)).resolves.not.toHaveProperty(`dependencies`);
+      }),
+    );
+
+    test(
+      `it should remove all dependencies matching a glob pattern (star-word-star)`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`dep-loop-entry`]: `1.0.0`,
+          [`dep-loop-exit`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        await run(`remove`, `*loop*`);
+
+        await expect(readManifest(path)).resolves.not.toHaveProperty(`dependencies`);
+      }),
+    );
+
+
+    test(
+      `it should remove all dependencies matching a glob pattern (braces)`,
+      makeTemporaryEnv({
+        dependencies: {
+          [`dep-loop-entry`]: `1.0.0`,
+          [`dep-loop-exit`]: `1.0.0`,
+        },
+      }, async ({path, run, source}) => {
+        await run(`remove`, `dep-loop-{entry,exit}`);
+
+        await expect(readManifest(path)).resolves.not.toHaveProperty(`dependencies`);
       }),
     );
   });

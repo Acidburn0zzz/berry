@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
-import {getPluginConfiguration}                                                                                                                                              from '@yarnpkg/cli';
-import {Cache, Configuration, Project, Report, Workspace, structUtils, ProjectLookup, Manifest, Descriptor, HardDependencies, ThrowReport, StreamReport, MessageName, Ident} from '@yarnpkg/core';
-import {PortablePath, npath, ppath, xfs}                                                                                                                                     from '@yarnpkg/fslib';
-import {Cli, Command}                                                                                                                                                        from 'clipanion';
-import globby                                                                                                                                                                from 'globby';
-import micromatch                                                                                                                                                            from 'micromatch';
-import {Module}                                                                                                                                                              from 'module';
-import * as ts                                                                                                                                                               from 'typescript';
+import {getPluginConfiguration}                                                                                                                                                                            from '@yarnpkg/cli';
+import {Cache, Configuration, Project, Report, Workspace, structUtils, ProjectLookup, Manifest, Descriptor, HardDependencies, ThrowReport, StreamReport, MessageName, Ident, ResolveOptions, FetchOptions} from '@yarnpkg/core';
+import {PortablePath, npath, ppath, xfs}                                                                                                                                                                   from '@yarnpkg/fslib';
+import {Cli, Command, Builtins, Option}                                                                                                                                                                    from 'clipanion';
+import globby                                                                                                                                                                                              from 'globby';
+import micromatch                                                                                                                                                                                          from 'micromatch';
+import {Module}                                                                                                                                                                                            from 'module';
+import * as ts                                                                                                                                                                                             from 'typescript';
 
-import * as ast                                                                                                                                                              from './ast';
+import * as ast                                                                                                                                                                                            from './ast';
 
 const BUILTINS = new Set([...Module.builtinModules || [], `pnpapi`]);
 
@@ -25,6 +25,7 @@ async function findFiles(pattern: string, cwd: PortablePath, {ignoredFolders = [
     absolute: true,
     cwd: npath.fromPortablePath(cwd),
     ignore: [`**/node_modules/**`, ...ignoredFolders.map(p => `${npath.fromPortablePath(p)}/**`)],
+    gitignore: true,
   });
 
   return files.map(p => {
@@ -54,7 +55,7 @@ function extractIdents(name: string) {
     // Webpack loaders can have query strings
     const partWithQs = part.replace(/\?.*/, ``);
 
-    const match = partWithQs.match(/^(?!\.{0,2}(\/|$))(@[^\/]*\/)?([^\/]+)/);
+    const match = partWithQs.match(/^(?!\.{0,2}(\/|$))(@[^/]*\/)?([^/]+)/);
     if (!match)
       continue;
 
@@ -103,7 +104,7 @@ function checkForUnsafeWebpackLoaderAccess(workspace: Workspace, initializerNode
   report.reportWarning(MessageName.UNNAMED, `${prettyLocation}: Webpack configs from non-private packages should avoid referencing loaders without require.resolve`);
 }
 
-function checkForNodeModuleStrings(stringishNode: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateExpression , {configuration, report}: {configuration: Configuration, report: Report}) {
+function checkForNodeModuleStrings(stringishNode: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateExpression, {configuration, report}: {configuration: Configuration, report: Report}) {
   const match = /node_modules(?!(\\{2}|\/)\.cache)/g.test(stringishNode.getText());
   if (match) {
     const prettyLocation = ast.prettyNodeLocation(configuration, stringishNode);
@@ -160,19 +161,19 @@ function processFile(workspace: Workspace, file: ts.SourceFile, {configuration, 
 
       case ts.SyntaxKind.StringLiteral: {
         const stringNode = node as ts.StringLiteral;
-        checkForNodeModuleStrings(stringNode, {configuration, report} );
+        checkForNodeModuleStrings(stringNode, {configuration, report});
       } break;
 
       case ts.SyntaxKind.NoSubstitutionTemplateLiteral: {
         const stringNode = node as ts.NoSubstitutionTemplateLiteral;
 
-        checkForNodeModuleStrings(stringNode, {configuration, report} );
+        checkForNodeModuleStrings(stringNode, {configuration, report});
       } break;
 
       case ts.SyntaxKind.TemplateExpression: {
         const stringNode = node as ts.TemplateExpression;
 
-        checkForNodeModuleStrings(stringNode, {configuration, report} );
+        checkForNodeModuleStrings(stringNode, {configuration, report});
       } break;
     }
 
@@ -191,12 +192,12 @@ async function buildJsonNode(p: PortablePath, accesses: Array<string>) {
 
   const sourceFile = await ts.createSourceFile(
     npath.fromPortablePath(p),
-    `(${content})`,
-    ts.ScriptTarget.ES2015,
+    content,
+    ts.ScriptTarget.JSON,
     /*setParentNodes */ true,
   );
 
-  // @ts-ignore
+  // @ts-expect-error
   let node: ts.Node = sourceFile.statements[0].expression;
   if (!node)
     throw new Error(`Invalid source tree`);
@@ -226,6 +227,8 @@ async function checkForUnmetPeerDependency(workspace: Workspace, dependencyType:
     return;
   if (dependencyType === `devDependencies` && workspace.manifest.hasHardDependency(peer))
     return;
+  if (workspace.manifest.name?.identHash === peer.identHash)
+    return;
 
   const propertyNode = await buildJsonNode(ppath.join(workspace.cwd, Manifest.fileName), [dependencyType, structUtils.stringifyIdent(via)]);
   const prettyLocation = ast.prettyNodeLocation(configuration, propertyNode);
@@ -242,8 +245,8 @@ async function makeResolveFn(project: Project) {
   const checksums = project.storedChecksums;
   const yarnReport = new ThrowReport();
 
-  const fetchOptions = {project, fetcher, cache, checksums, report: yarnReport};
-  const resolveOptions = {...fetchOptions, resolver};
+  const fetchOptions: FetchOptions = {project, fetcher, cache, checksums, report: yarnReport, skipIntegrityCheck: true};
+  const resolveOptions: ResolveOptions = {...fetchOptions, resolver, fetchOptions};
 
   return async (descriptor: Descriptor) => {
     const candidates = await resolver.getCandidates(descriptor, new Map(), resolveOptions);
@@ -290,8 +293,11 @@ async function processWorkspace(workspace: Workspace, {configuration, fileList, 
   const reportedProgress = report.reportProgress(progress);
 
   for (const scriptName of workspace.manifest.scripts.keys())
-    if (scriptName.match(/^(pre|post)(?!(install|pack)$)/))
+    if (scriptName.match(/^(pre|post)(?!(install|pack)$)/) && !scriptName.match(/^prettier/))
       report.reportWarning(MessageName.UNNAMED, `User scripts prefixed with "pre" or "post" (like "${scriptName}") will not be called in sequence anymore; prefer calling prologues and epilogues explicitly`);
+
+  if (Array.isArray(workspace.manifest.raw.bundleDependencies) || Array.isArray(workspace.manifest.raw.bundledDependencies))
+    report.reportWarning(MessageName.UNNAMED, `The bundleDependencies (or bundledDependencies) field is not supported anymore; prefer using a bundler`);
 
   for (const p of fileList) {
     const parsed = await parseFile(p);
@@ -309,14 +315,10 @@ async function processWorkspace(workspace: Workspace, {configuration, fileList, 
 }
 
 class EntryCommand extends Command {
-  @Command.Boolean(`--scoped`)
-  scoped: boolean = false;
-
-  @Command.String({required: false})
-  cwd: string = `.`;
+  cwd = Option.String({required: false});
 
   async execute() {
-    const cwd = npath.toPortablePath(npath.resolve(this.cwd));
+    const cwd = npath.toPortablePath(npath.resolve(this.cwd ?? `.`));
 
     const configuration = await Configuration.find(cwd, null, {strict: false});
 
@@ -359,7 +361,7 @@ class EntryCommand extends Command {
       return null;
     };
 
-    await StreamReport.start({
+    const report = await StreamReport.start({
       configuration,
       stdout: this.context.stdout,
     }, async report => {
@@ -381,12 +383,12 @@ class EntryCommand extends Command {
               if (!workspace)
                 return;
 
-              const patterns = [`**/*`];
+              const patterns = [`${manifestFolder}/**`];
               const ignore = [];
 
               for (const otherManifestFolder of allManifestFolders) {
                 const sub = ppath.contains(manifestFolder, otherManifestFolder);
-                if (sub !== `.`) {
+                if (sub !== null && sub !== `.`) {
                   ignore.push(`${otherManifestFolder}/**`);
                 }
               }
@@ -411,11 +413,20 @@ class EntryCommand extends Command {
       report.reportSeparator();
       await reportedProgress;
     });
+
+    return report.exitCode();
   }
 }
 
-const cli = new Cli({binaryName: `yarn dlx @yarnpkg/doctor`});
+const cli = new Cli({
+  binaryLabel: `Yarn Doctor`,
+  binaryName: `yarn dlx @yarnpkg/doctor`,
+  binaryVersion: require(`@yarnpkg/doctor/package.json`).version,
+});
+
 cli.register(EntryCommand);
+cli.register(Builtins.VersionCommand);
+
 cli.runExit(process.argv.slice(2), {
   stdin: process.stdin,
   stdout: process.stdout,

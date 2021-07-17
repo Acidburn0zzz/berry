@@ -56,6 +56,10 @@ export class TarballFileResolver implements Resolver {
     return [structUtils.makeLocator(descriptor, `${PROTOCOL}${npath.toPortablePath(path)}`)];
   }
 
+  async getSatisfying(descriptor: Descriptor, references: Array<string>, opts: ResolveOptions) {
+    return null;
+  }
+
   async resolve(locator: Locator, opts: ResolveOptions) {
     if (!opts.fetchOptions)
       throw new Error(`Assertion failed: This resolver cannot be used unless a fetcher is configured`);
@@ -71,7 +75,7 @@ export class TarballFileResolver implements Resolver {
 
       version: manifest.version || `0.0.0`,
 
-      languageName: opts.project.configuration.get(`defaultLanguageName`),
+      languageName: manifest.languageName || opts.project.configuration.get(`defaultLanguageName`),
       linkType: LinkType.HARD,
 
       dependencies: manifest.dependencies,
